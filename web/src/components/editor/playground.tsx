@@ -14,13 +14,14 @@ import {
 import { createAssetStoreAdapter } from '../../adapters/asset-adapter';
 import { flattenLayersForRender, findLayerById } from '../../lib/layer-tree';
 import { transformToCss } from '../../lib/transform';
-import { zoomAboutPoint, clampZoom, DEFAULT_ZOOM_CONFIG } from '../../lib/zoom-utils';
+import { zoomAboutPoint, DEFAULT_ZOOM_CONFIG } from '../../lib/zoom-utils';
 import { constrainViewportWithElasticity } from '../../lib/bounds-utils';
 import { createLayer, useEditorDispatch } from '../../stores/editor-store';
 import { useAuth } from '../../stores/auth-store';
 import { useViewportDispatch, useViewportState } from '../../stores/viewport-store';
 import { useInertialPan } from '../../hooks/use-inertial-pan';
 import { PlaygroundHud } from './playground-hud';
+import { GridRenderer } from './grid-renderer';
 
 export interface EditorPlaygroundRef {
   containerRef: React.RefObject<HTMLDivElement>;
@@ -37,7 +38,7 @@ interface EditorPlaygroundProps {
 
 type PointerMode =
   | { type: 'idle' }
-  | { type: 'pan'; startX: number; startY: number; offsetX: number; offsetY: number }
+  | { type: 'pan'; lastX: number; lastY: number }
   | { type: 'move'; layerId: string; startX: number; startY: number; transform: Transform }
   | { type: 'resize'; layerId: string; startX: number; startY: number; transform: Transform; corner: 'se' | 'nw' }
   | { type: 'rotate'; layerId: string; startX: number; startY: number; transform: Transform };
@@ -68,12 +69,22 @@ export const EditorPlayground = ({
 
   // Inertial pan hook
   const { trackVelocity, startInertia, cancelInertia, resetVelocity } = useInertialPan((dx, dy) => {
+    if (!containerRef.current) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const constrained = constrainViewportWithElasticity(
+      viewport.offsetX + dx,
+      viewport.offsetY + dy,
+      document.width,
+      document.height,
+      rect.width,
+      rect.height,
+      viewport.zoom
+    );
+
     viewportDispatch({
       type: 'update',
-      viewport: {
-        offsetX: viewport.offsetX + dx,
-        offsetY: viewport.offsetY + dy
-      }
+      viewport: constrained
     });
   });
 
@@ -96,7 +107,11 @@ export const EditorPlayground = ({
               rect.width / 2,
               rect.height / 2,
               rect.width,
-              rect.height
+              rect.height,
+              {
+                contentWidth: document.width,
+                contentHeight: document.height
+              }
             );
             viewportDispatch({ type: 'update', viewport: newTransform });
           }
@@ -111,7 +126,11 @@ export const EditorPlayground = ({
               rect.width / 2,
               rect.height / 2,
               rect.width,
-              rect.height
+              rect.height,
+              {
+                contentWidth: document.width,
+                contentHeight: document.height
+              }
             );
             viewportDispatch({ type: 'update', viewport: newTransform });
           }
@@ -191,10 +210,8 @@ export const EditorPlayground = ({
       resetVelocity(); // Reset velocity tracking
       setPointerMode({
         type: 'pan',
-        startX: event.clientX,
-        startY: event.clientY,
-        offsetX: viewport.offsetX,
-        offsetY: viewport.offsetY
+        lastX: event.clientX,
+        lastY: event.clientY
       });
       (event.target as HTMLElement).setPointerCapture(event.pointerId);
       return;
@@ -206,11 +223,13 @@ export const EditorPlayground = ({
       // Track velocity for inertia
       trackVelocity(event.clientX, event.clientY);
 
-      const dx = (event.clientX - pointerMode.startX) / viewport.zoom;
-      const dy = (event.clientY - pointerMode.startY) / viewport.zoom;
+      // Calculate delta from LAST position (not start position)
+      // This ensures 1:1 continuous tracking with the mouse
+      const dx = event.clientX - pointerMode.lastX;
+      const dy = event.clientY - pointerMode.lastY;
 
-      const newOffsetX = pointerMode.offsetX + dx;
-      const newOffsetY = pointerMode.offsetY + dy;
+      const newOffsetX = viewport.offsetX + dx;
+      const newOffsetY = viewport.offsetY + dy;
 
       // Apply elastic bounds
       const rect = containerRef.current.getBoundingClientRect();
@@ -227,6 +246,13 @@ export const EditorPlayground = ({
       viewportDispatch({
         type: 'update',
         viewport: constrained
+      });
+
+      // Update lastX/lastY for next move
+      setPointerMode({
+        type: 'pan',
+        lastX: event.clientX,
+        lastY: event.clientY
       });
     }
   };
@@ -257,7 +283,18 @@ export const EditorPlayground = ({
       const cursorY = event.clientY - rect.top;
 
       // Apply cursor-anchored zoom
-      const newTransform = zoomAboutPoint(viewport, targetZoom, cursorX, cursorY, rect.width, rect.height);
+      const newTransform = zoomAboutPoint(
+        viewport,
+        targetZoom,
+        cursorX,
+        cursorY,
+        rect.width,
+        rect.height,
+        {
+          contentWidth: document.width,
+          contentHeight: document.height
+        }
+      );
 
       viewportDispatch({
         type: 'update',
@@ -269,7 +306,7 @@ export const EditorPlayground = ({
     return () => {
       container.removeEventListener('wheel', handleWheel);
     };
-  }, [viewport, viewportDispatch]);
+  }, [viewport, viewportDispatch, document.width, document.height]);
 
   const handleDrop = async (event: ReactDragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -346,7 +383,7 @@ export const EditorPlayground = ({
       <div className="sr-only" aria-live="polite" ref={liveRegionRef} />
       <div
         ref={containerRef}
-        className={`relative h-full w-full overflow-hidden ${
+        className={`relative h-full w-full overflow-hidden bg-background ${
           pointerMode.type === 'pan' ? 'cursor-grabbing' : spacePressed ? 'cursor-grab' : 'cursor-crosshair'
         }`}
         onPointerDown={handlePointerDown}
@@ -356,15 +393,30 @@ export const EditorPlayground = ({
         onDrop={handleDrop}
         onDragOver={handleDragOver}
       >
+        {/* Grid background - behind everything */}
+        {showGrid && (
+          <div
+            className="absolute left-1/2 top-1/2 origin-top-left pointer-events-none"
+            style={{
+              transform: `translate(${viewport.offsetX}px, ${viewport.offsetY}px) scale(${viewport.zoom})`,
+              width: document.width,
+              height: document.height
+            }}
+          >
+            <GridRenderer zoom={viewport.zoom} canvasWidth={document.width} canvasHeight={document.height} />
+          </div>
+        )}
+
+        {/* Canvas and layers */}
         <div
-          className={`absolute left-1/2 top-1/2 min-h-full min-w-full origin-top-left ${showGrid ? 'grid-background' : ''}`}
+          className="absolute left-1/2 top-1/2 origin-top-left will-change-transform"
           style={{
             transform: `translate(${viewport.offsetX}px, ${viewport.offsetY}px) scale(${viewport.zoom})`
           }}
           onClick={() => onSelectLayers([])}
         >
           <div
-            className="relative"
+            className="relative shadow-lg"
             style={{ width: document.width, height: document.height, backgroundColor: document.baseColor }}
           >
             {visibleLayers.map((layer) => (

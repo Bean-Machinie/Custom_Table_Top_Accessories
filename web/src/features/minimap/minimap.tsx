@@ -50,9 +50,18 @@ export const Minimap = ({ document, containerRef }: MinimapProps) => {
     const visibleWidth = containerRect.width / viewport.zoom;
     const visibleHeight = containerRect.height / viewport.zoom;
 
-    // Center of visible area in canvas space
-    const centerX = -viewport.offsetX / viewport.zoom + containerRect.width / 2 / viewport.zoom;
-    const centerY = -viewport.offsetY / viewport.zoom + containerRect.height / 2 / viewport.zoom;
+    // Canvas top-left position in playground coordinates
+    // With origin-top-left, canvas starts at container center (50%, 50%)
+    // Then offset by viewport.offsetX/Y
+    const canvasTopLeftX = viewport.offsetX;
+    const canvasTopLeftY = viewport.offsetY;
+
+    // Viewport top-left in canvas coordinates
+    // Container center is where canvas (0,0) is positioned
+    const viewportTopLeftInCanvas = {
+      x: (containerRect.width / 2 - canvasTopLeftX) / viewport.zoom,
+      y: (containerRect.height / 2 - canvasTopLeftY) / viewport.zoom
+    };
 
     // Convert to minimap space
     const width = visibleWidth * minimapScale;
@@ -64,8 +73,8 @@ export const Minimap = ({ document, containerRef }: MinimapProps) => {
     const offsetX = (minimapWidth - documentWidth) / 2;
     const offsetY = (minimapHeight - documentHeight) / 2;
 
-    const x = offsetX + (centerX - visibleWidth / 2) * minimapScale;
-    const y = offsetY + (centerY - visibleHeight / 2) * minimapScale;
+    const x = offsetX + viewportTopLeftInCanvas.x * minimapScale;
+    const y = offsetY + viewportTopLeftInCanvas.y * minimapScale;
 
     return { x, y, width, height };
   }, [viewport, minimapScale, document.width, document.height, containerRef]);
@@ -96,8 +105,11 @@ export const Minimap = ({ document, containerRef }: MinimapProps) => {
       const canvasY = (y - offsetY) / minimapScale;
 
       // Calculate new viewport offset to center this point
-      const newOffsetX = -(canvasX * viewport.zoom - containerRect.width / 2);
-      const newOffsetY = -(canvasY * viewport.zoom - containerRect.height / 2);
+      // We want the clicked canvas point to be at the center of the viewport
+      // Canvas (0,0) is at container center, so:
+      // newOffsetX should position canvas such that canvasX is at viewport center
+      const newOffsetX = containerRect.width / 2 - canvasX * viewport.zoom;
+      const newOffsetY = containerRect.height / 2 - canvasY * viewport.zoom;
 
       viewportDispatch({
         type: 'update',

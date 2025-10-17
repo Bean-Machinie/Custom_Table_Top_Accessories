@@ -2,6 +2,8 @@
  * Utilities for calculating and enforcing pan boundaries with elastic resistance
  */
 
+import { DEFAULT_VIEWPORT_PADDING } from './zoom-utils';
+
 export interface Bounds {
   minX: number;
   maxX: number;
@@ -10,20 +12,17 @@ export interface Bounds {
 }
 
 export interface ElasticBoundsConfig {
-  // How much content can extend beyond the viewport before applying resistance
-  marginFactor: number; // 0.5 = allow 50% of viewport to extend beyond
   // Strength of elastic resistance (0-1, higher = more resistance)
   resistance: number;
 }
 
 const DEFAULT_CONFIG: ElasticBoundsConfig = {
-  marginFactor: 0.5,
-  resistance: 0.7
+  resistance: 0.02
 };
 
 /**
- * Calculate pan bounds for a canvas
- * Allows some panning beyond the canvas edges for a better UX
+ * Calculate pan bounds for a canvas based on the visible viewport and fixed padding
+ * Padding is applied in screen pixels, so the zoom level is accounted for here
  */
 export const calculatePanBounds = (
   canvasWidth: number,
@@ -31,28 +30,32 @@ export const calculatePanBounds = (
   viewportWidth: number,
   viewportHeight: number,
   zoom: number,
-  config: ElasticBoundsConfig = DEFAULT_CONFIG
+  padding: number = DEFAULT_VIEWPORT_PADDING
 ): Bounds => {
-  // Calculate how much of the canvas is visible at current zoom
-  const visibleWidth = viewportWidth / zoom;
-  const visibleHeight = viewportHeight / zoom;
+  const scaledWidth = canvasWidth * zoom;
+  const scaledHeight = canvasHeight * zoom;
 
-  // Allow panning with some margin beyond the canvas
-  const marginX = visibleWidth * config.marginFactor;
-  const marginY = visibleHeight * config.marginFactor;
+  const halfViewportWidth = viewportWidth / 2;
+  const halfViewportHeight = viewportHeight / 2;
 
-  // Calculate bounds in viewport offset space
-  // Offset is positive when canvas moves right/down
-  return {
-    // Right edge: canvas left edge can go to right side of viewport
-    maxX: (canvasWidth - visibleWidth + marginX) * zoom,
-    // Left edge: canvas right edge can go to left side of viewport
-    minX: -(marginX * zoom),
-    // Bottom edge: canvas top edge can go to bottom of viewport
-    maxY: (canvasHeight - visibleHeight + marginY) * zoom,
-    // Top edge: canvas bottom edge can go to top of viewport
-    minY: -(marginY * zoom)
-  };
+  let minX = halfViewportWidth - scaledWidth - padding;
+  let maxX = padding - halfViewportWidth;
+  let minY = halfViewportHeight - scaledHeight - padding;
+  let maxY = padding - halfViewportHeight;
+
+  if (minX > maxX) {
+    const center = (minX + maxX) / 2;
+    minX = center;
+    maxX = center;
+  }
+
+  if (minY > maxY) {
+    const center = (minY + maxY) / 2;
+    minY = center;
+    maxY = center;
+  }
+
+  return { minX, maxX, minY, maxY };
 };
 
 /**
@@ -89,7 +92,8 @@ export const constrainViewportWithElasticity = (
   viewportWidth: number,
   viewportHeight: number,
   zoom: number,
-  config?: ElasticBoundsConfig
+  config: ElasticBoundsConfig = DEFAULT_CONFIG,
+  padding: number = DEFAULT_VIEWPORT_PADDING
 ): { offsetX: number; offsetY: number } => {
   const bounds = calculatePanBounds(
     canvasWidth,
@@ -97,7 +101,7 @@ export const constrainViewportWithElasticity = (
     viewportWidth,
     viewportHeight,
     zoom,
-    config
+    padding
   );
 
   return {

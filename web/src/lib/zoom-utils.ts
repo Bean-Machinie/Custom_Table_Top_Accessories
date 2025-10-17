@@ -16,6 +16,8 @@ export const DEFAULT_ZOOM_CONFIG: ZoomConfig = {
   wheelZoomFactor: 0.1
 };
 
+export const DEFAULT_VIEWPORT_PADDING = 500;
+
 export interface ViewportTransform {
   zoom: number;
   offsetX: number;
@@ -23,10 +25,74 @@ export interface ViewportTransform {
 }
 
 /**
- * Clamps a zoom value within the configured min/max range
+ * Calculates the minimum zoom level based on canvas and viewport size
+ * Ensures canvas doesn't get smaller than 200px margin on each side
+ *
+ * @param canvasWidth - Width of the canvas
+ * @param canvasHeight - Height of the canvas
+ * @param viewportWidth - Width of the viewport
+ * @param viewportHeight - Height of the viewport
+ * @returns Minimum zoom level
  */
-export const clampZoom = (zoom: number, config: ZoomConfig = DEFAULT_ZOOM_CONFIG): number => {
-  return Math.min(Math.max(zoom, config.minZoom), config.maxZoom);
+export const calculateMinZoom = (
+  canvasWidth: number,
+  canvasHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  padding: number = DEFAULT_VIEWPORT_PADDING,
+  baseMinZoom: number = DEFAULT_ZOOM_CONFIG.minZoom
+): number => {
+  if (
+    canvasWidth <= 0 ||
+    canvasHeight <= 0 ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0
+  ) {
+    return baseMinZoom;
+  }
+
+  const widthConstraint = viewportWidth / (canvasWidth + padding * 2);
+  const heightConstraint = viewportHeight / (canvasHeight + padding * 2);
+
+  // Ensure we satisfy both axis constraints, but never require zooming in past 100%
+  const paddedMinZoom = Math.min(1, Math.max(widthConstraint, heightConstraint));
+
+  return Math.max(paddedMinZoom, baseMinZoom);
+};
+
+/**
+ * Clamps a zoom value within the configured min/max range
+ * Can optionally use dynamic minimum based on canvas/viewport size
+ */
+export const clampZoom = (
+  zoom: number,
+  config: ZoomConfig = DEFAULT_ZOOM_CONFIG,
+  canvasWidth?: number,
+  canvasHeight?: number,
+  viewportWidth?: number,
+  viewportHeight?: number,
+  padding: number = DEFAULT_VIEWPORT_PADDING
+): number => {
+  let minZoom = config.minZoom;
+
+  // If canvas and viewport dimensions provided, calculate dynamic minimum
+  if (
+    typeof canvasWidth === 'number' &&
+    typeof canvasHeight === 'number' &&
+    typeof viewportWidth === 'number' &&
+    typeof viewportHeight === 'number'
+  ) {
+    minZoom = calculateMinZoom(
+      canvasWidth,
+      canvasHeight,
+      viewportWidth,
+      viewportHeight,
+      padding,
+      config.minZoom
+    );
+  }
+
+  return Math.min(Math.max(zoom, minZoom), config.maxZoom);
 };
 
 /**
@@ -49,9 +115,29 @@ export const zoomAboutPoint = (
   cursorY: number,
   containerWidth: number,
   containerHeight: number,
-  config: ZoomConfig = DEFAULT_ZOOM_CONFIG
+  options?: {
+    config?: ZoomConfig;
+    contentWidth?: number;
+    contentHeight?: number;
+    padding?: number;
+  }
 ): ViewportTransform => {
-  const clampedZoom = clampZoom(targetZoom, config);
+  const {
+    config = DEFAULT_ZOOM_CONFIG,
+    contentWidth,
+    contentHeight,
+    padding
+  } = options ?? {};
+
+  const clampedZoom = clampZoom(
+    targetZoom,
+    config,
+    contentWidth,
+    contentHeight,
+    containerWidth,
+    containerHeight,
+    padding
+  );
 
   // Convert cursor position from container space to canvas space
   // This finds the point on the canvas that's currently under the cursor
@@ -77,7 +163,12 @@ export const zoomAboutCenter = (
   targetZoom: number,
   containerWidth: number,
   containerHeight: number,
-  config: ZoomConfig = DEFAULT_ZOOM_CONFIG
+  options?: {
+    config?: ZoomConfig;
+    contentWidth?: number;
+    contentHeight?: number;
+    padding?: number;
+  }
 ): ViewportTransform => {
   return zoomAboutPoint(
     currentTransform,
@@ -86,7 +177,7 @@ export const zoomAboutCenter = (
     containerHeight / 2,
     containerWidth,
     containerHeight,
-    config
+    options
   );
 };
 
@@ -118,6 +209,12 @@ export const calculateFitZoom = (
 
 /**
  * Calculates transform to center and fit content in viewport
+ *
+ * Since canvas uses origin-top-left with left-1/2 top-1/2 positioning,
+ * we need negative offsets to center it properly:
+ * - Container center is at (50%, 50%)
+ * - Canvas top-left starts at container center
+ * - To center canvas, shift it back by half its scaled dimensions
  */
 export const fitToScreen = (
   contentWidth: number,
@@ -132,10 +229,16 @@ export const fitToScreen = (
     config
   );
 
+  // Calculate centered offsets
+  // Canvas top-left is at container center (50%, 50%)
+  // Shift back by half the scaled canvas size to center it
+  const offsetX = -(contentWidth * fitZoom) / 2;
+  const offsetY = -(contentHeight * fitZoom) / 2;
+
   return {
     zoom: fitZoom,
-    offsetX: 0,
-    offsetY: 0
+    offsetX,
+    offsetY
   };
 };
 

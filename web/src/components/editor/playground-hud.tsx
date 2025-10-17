@@ -41,12 +41,16 @@ export const PlaygroundHud = ({ document, showGrid, onToggleGrid, containerRef }
         viewport.zoom * DEFAULT_ZOOM_CONFIG.zoomStep,
         rect.width / 2,
         rect.height / 2,
-        rect.width,
-        rect.height
+        rect.width, 
+        rect.height,
+        {
+          contentWidth: document.width,
+          contentHeight: document.height
+        }
       );
       viewportDispatch({ type: 'update', viewport: newTransform });
     }
-  }, [viewport, viewportDispatch, containerRef]);
+  }, [viewport, viewportDispatch, containerRef, document.width, document.height]);
 
   const handleZoomOut = useCallback(() => {
     if (containerRef.current) {
@@ -57,11 +61,15 @@ export const PlaygroundHud = ({ document, showGrid, onToggleGrid, containerRef }
         rect.width / 2,
         rect.height / 2,
         rect.width,
-        rect.height
+        rect.height,
+        {
+          contentWidth: document.width,
+          contentHeight: document.height
+        }
       );
       viewportDispatch({ type: 'update', viewport: newTransform });
     }
-  }, [viewport, viewportDispatch, containerRef]);
+  }, [viewport, viewportDispatch, containerRef, document.width, document.height]);
 
   const handleFitToScreen = useCallback(() => {
     if (containerRef.current) {
@@ -91,11 +99,31 @@ export const PlaygroundHud = ({ document, showGrid, onToggleGrid, containerRef }
   const handleZoomInputBlur = () => {
     const value = parseInt(zoomInputValue, 10);
     if (!isNaN(value) && value > 0) {
-      const newZoom = clampZoom(value / 100);
-      viewportDispatch({
-        type: 'update',
-        viewport: { zoom: newZoom }
-      });
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const newTransform = zoomAboutPoint(
+          viewport,
+          value / 100,
+          rect.width / 2,
+          rect.height / 2,
+          rect.width,
+          rect.height,
+          {
+            contentWidth: document.width,
+            contentHeight: document.height
+          }
+        );
+        viewportDispatch({
+          type: 'update',
+          viewport: newTransform
+        });
+      } else {
+        const newZoom = clampZoom(value / 100, DEFAULT_ZOOM_CONFIG, document.width, document.height);
+        viewportDispatch({
+          type: 'update',
+          viewport: { zoom: newZoom }
+        });
+      }
     }
     setIsEditingZoom(false);
   };

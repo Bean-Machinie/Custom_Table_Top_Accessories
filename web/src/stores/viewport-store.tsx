@@ -2,7 +2,7 @@ import type { EditorViewportState } from '@shared/index';
 import { createContext, ReactNode, useContext, useEffect, useMemo, useReducer } from 'react';
 
 import { loadViewport, persistViewport } from '../lib/persistence';
-import { type ZoomPreset, getPresetZoom, clampZoom } from '../lib/zoom-utils';
+import { type ZoomPreset, getPresetZoom, clampZoom, DEFAULT_ZOOM_CONFIG } from '../lib/zoom-utils';
 
 interface ViewportActionUpdate {
   type: 'update';
@@ -51,14 +51,23 @@ const reducer = (state: ViewportState, action: ViewportAction): ViewportState =>
           action.contentHeight,
           action.containerWidth,
           action.containerHeight
-        )
+        ),
+        DEFAULT_ZOOM_CONFIG,
+        action.contentWidth,
+        action.contentHeight,
+        action.containerWidth,
+        action.containerHeight
       );
       // Center the content when applying preset
+      // Since canvas uses origin-top-left, we need negative offsets to center
+      const offsetX = -(action.contentWidth * zoom) / 2;
+      const offsetY = -(action.contentHeight * zoom) / 2;
+
       return {
         ...state,
         zoom,
-        offsetX: 0,
-        offsetY: 0
+        offsetX,
+        offsetY
       };
     }
     default:
