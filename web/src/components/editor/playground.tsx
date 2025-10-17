@@ -14,15 +14,19 @@ import {
 import { createAssetStoreAdapter } from '../../adapters/asset-adapter';
 import { flattenLayersForRender, findLayerById } from '../../lib/layer-tree';
 import { transformToCss } from '../../lib/transform';
+import { zoomAboutPoint, clampZoom, DEFAULT_ZOOM_CONFIG } from '../../lib/zoom-utils';
 import { createLayer, useEditorDispatch } from '../../stores/editor-store';
 import { useAuth } from '../../stores/auth-store';
 import { useViewportDispatch, useViewportState } from '../../stores/viewport-store';
+import { useInertialPan } from '../../hooks/use-inertial-pan';
+import { PlaygroundHud } from './playground-hud';
 
 interface EditorPlaygroundProps {
   document: FrameDocument;
   selectedLayerIds: string[];
   onSelectLayers: (layerIds: string[]) => void;
   showGrid: boolean;
+  onToggleGrid?: () => void;
 }
 
 type PointerMode =
@@ -32,7 +36,13 @@ type PointerMode =
   | { type: 'resize'; layerId: string; startX: number; startY: number; transform: Transform; corner: 'se' | 'nw' }
   | { type: 'rotate'; layerId: string; startX: number; startY: number; transform: Transform };
 
-export const EditorPlayground = ({ document, selectedLayerIds, onSelectLayers, showGrid }: EditorPlaygroundProps) => {
+export const EditorPlayground = ({
+  document,
+  selectedLayerIds,
+  onSelectLayers,
+  showGrid,
+  onToggleGrid
+}: EditorPlaygroundProps) => {
   const viewport = useViewportState();
   const viewportDispatch = useViewportDispatch();
   const dispatch = useEditorDispatch();
@@ -48,11 +58,80 @@ export const EditorPlayground = ({ document, selectedLayerIds, onSelectLayers, s
   const liveRegionRef = useRef<HTMLDivElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  // Inertial pan hook
+  const { trackVelocity, startInertia, cancelInertia, resetVelocity } = useInertialPan((dx, dy) => {
+    viewportDispatch({
+      type: 'update',
+      viewport: {
+        offsetX: viewport.offsetX + dx,
+        offsetY: viewport.offsetY + dy
+      }
+    });
+  });
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.code === 'Space') {
         setSpacePressed(true);
       }
+
+      // Zoom shortcuts
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey) {
+        if (event.key === '=' || event.key === '+') {
+          // Ctrl/Cmd + = (zoom in)
+          event.preventDefault();
+          if (containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            const newTransform = zoomAboutPoint(
+              viewport,
+              viewport.zoom * DEFAULT_ZOOM_CONFIG.zoomStep,
+              rect.width / 2,
+              rect.height / 2,
+              rect.width,
+              rect.height
+            );
+            viewportDispatch({ type: 'update', viewport: newTransform });
+          }
+        } else if (event.key === '-' || event.key === '_') {
+          // Ctrl/Cmd + - (zoom out)
+          event.preventDefault();
+          if (containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            const newTransform = zoomAboutPoint(
+              viewport,
+              viewport.zoom / DEFAULT_ZOOM_CONFIG.zoomStep,
+              rect.width / 2,
+              rect.height / 2,
+              rect.width,
+              rect.height
+            );
+            viewportDispatch({ type: 'update', viewport: newTransform });
+          }
+        } else if (event.key === '0') {
+          // Ctrl/Cmd + 0 (fit to screen)
+          event.preventDefault();
+          if (containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            viewportDispatch({
+              type: 'zoom-preset',
+              preset: 'fit',
+              contentWidth: document.width,
+              contentHeight: document.height,
+              containerWidth: rect.width,
+              containerHeight: rect.height
+            });
+          }
+        } else if (event.key === '1') {
+          // Ctrl/Cmd + 1 (100% zoom)
+          event.preventDefault();
+          viewportDispatch({
+            type: 'update',
+            viewport: { zoom: 1, offsetX: 0, offsetY: 0 }
+          });
+        }
+      }
+
+      // Arrow keys for layer movement
       if (
         selectedLayerIds.length > 0 &&
         (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'ArrowLeft' || event.key === 'ArrowRight')
@@ -87,7 +166,7 @@ export const EditorPlayground = ({ document, selectedLayerIds, onSelectLayers, s
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [dispatch, document, selectedLayerIds]);
+  }, [dispatch, document, selectedLayerIds, viewport, viewportDispatch]);
 
   useEffect(() => {
     liveRegionRef.current?.setAttribute('aria-live', 'polite');
@@ -100,6 +179,8 @@ export const EditorPlayground = ({ document, selectedLayerIds, onSelectLayers, s
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!containerRef.current) return;
     if (event.button === 1 || spacePressed || event.button === 2) {
+      cancelInertia(); // Cancel any ongoing inertia
+      resetVelocity(); // Reset velocity tracking
       setPointerMode({
         type: 'pan',
         startX: event.clientX,
@@ -114,6 +195,9 @@ export const EditorPlayground = ({ document, selectedLayerIds, onSelectLayers, s
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (pointerMode.type === 'pan') {
+      // Track velocity for inertia
+      trackVelocity(event.clientX, event.clientY);
+
       const dx = (event.clientX - pointerMode.startX) / viewport.zoom;
       const dy = (event.clientY - pointerMode.startY) / viewport.zoom;
       viewportDispatch({
@@ -127,19 +211,44 @@ export const EditorPlayground = ({ document, selectedLayerIds, onSelectLayers, s
   };
 
   const handlePointerUp = () => {
+    // Start inertia if we were panning
+    if (pointerMode.type === 'pan') {
+      startInertia();
+    }
     setPointerMode({ type: 'idle' });
   };
 
-  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    if (event.ctrlKey) {
+  // Use native wheel event listener with passive: false to allow preventDefault
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
+
+      // Calculate zoom delta
       const delta = event.deltaY > 0 ? 0.9 : 1.1;
+      const targetZoom = viewport.zoom * delta;
+
+      // Get cursor position relative to container
+      const rect = container.getBoundingClientRect();
+      const cursorX = event.clientX - rect.left;
+      const cursorY = event.clientY - rect.top;
+
+      // Apply cursor-anchored zoom
+      const newTransform = zoomAboutPoint(viewport, targetZoom, cursorX, cursorY, rect.width, rect.height);
+
       viewportDispatch({
         type: 'update',
-        viewport: { zoom: Math.min(Math.max(viewport.zoom * delta, 0.1), 8) }
+        viewport: newTransform
       });
-    }
-  };
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+    };
+  }, [viewport, viewportDispatch]);
 
   const handleDrop = async (event: ReactDragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -171,11 +280,13 @@ export const EditorPlayground = ({ document, selectedLayerIds, onSelectLayers, s
   const visibleLayers = layers.filter((layer) => layer.type !== 'group' && layer.visible);
 
   return (
-    <div className="relative h-full flex-1 overflow-hidden" onWheel={handleWheel}>
+    <div className="relative h-full flex-1 overflow-hidden">
       <div className="sr-only" aria-live="polite" ref={liveRegionRef} />
       <div
         ref={containerRef}
-        className="relative h-full w-full cursor-crosshair overflow-hidden"
+        className={`relative h-full w-full overflow-hidden ${
+          pointerMode.type === 'pan' ? 'cursor-grabbing' : spacePressed ? 'cursor-grab' : 'cursor-crosshair'
+        }`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -219,10 +330,13 @@ export const EditorPlayground = ({ document, selectedLayerIds, onSelectLayers, s
       {uploadError && (
         <div
           role="alert"
-          className="pointer-events-none absolute bottom-4 left-1/2 w-[min(90%,400px)] -translate-x-1/2 rounded-md border border-danger/40 bg-danger/10 px-4 py-2 text-center text-xs text-danger"
+          className="pointer-events-none absolute bottom-20 left-1/2 w-[min(90%,400px)] -translate-x-1/2 rounded-md border border-danger/40 bg-danger/10 px-4 py-2 text-center text-xs text-danger"
         >
           {uploadError}
         </div>
+      )}
+      {onToggleGrid && (
+        <PlaygroundHud document={document} showGrid={showGrid} onToggleGrid={onToggleGrid} containerRef={containerRef} />
       )}
     </div>
   );

@@ -2,13 +2,27 @@ import type { EditorViewportState } from '@shared/index';
 import { createContext, ReactNode, useContext, useEffect, useMemo, useReducer } from 'react';
 
 import { loadViewport, persistViewport } from '../lib/persistence';
+import { type ZoomPreset, getPresetZoom, clampZoom } from '../lib/zoom-utils';
 
 interface ViewportActionUpdate {
   type: 'update';
   viewport: Partial<EditorViewportState>;
 }
 
-type ViewportAction = ViewportActionUpdate | { type: 'reset' } | { type: 'hydrate'; state: EditorViewportState | null };
+interface ViewportActionZoomPreset {
+  type: 'zoom-preset';
+  preset: ZoomPreset;
+  contentWidth: number;
+  contentHeight: number;
+  containerWidth: number;
+  containerHeight: number;
+}
+
+type ViewportAction =
+  | ViewportActionUpdate
+  | ViewportActionZoomPreset
+  | { type: 'reset' }
+  | { type: 'hydrate'; state: EditorViewportState | null };
 
 type ViewportState = EditorViewportState;
 
@@ -29,6 +43,24 @@ const reducer = (state: ViewportState, action: ViewportAction): ViewportState =>
       return defaultViewport;
     case 'update':
       return { ...state, ...action.viewport };
+    case 'zoom-preset': {
+      const zoom = clampZoom(
+        getPresetZoom(
+          action.preset,
+          action.contentWidth,
+          action.contentHeight,
+          action.containerWidth,
+          action.containerHeight
+        )
+      );
+      // Center the content when applying preset
+      return {
+        ...state,
+        zoom,
+        offsetX: 0,
+        offsetY: 0
+      };
+    }
     default:
       return state;
   }

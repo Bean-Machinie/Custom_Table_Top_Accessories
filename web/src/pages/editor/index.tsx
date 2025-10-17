@@ -75,6 +75,7 @@ const EditorPage = () => {
               selectedLayerIds={selectedLayerIds}
               onSelectLayers={setSelectedLayerIds}
               showGrid={showGrid}
+              onToggleGrid={() => setShowGrid(!showGrid)}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-muted">
