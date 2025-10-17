@@ -43,7 +43,7 @@ export const Sidebar = ({ className, children, ...props }: HTMLAttributes<HTMLDi
 export const Toolbar = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
   <div
     className={clsx(
-      'flex items-center gap-2 border-b border-border/50 bg-background/60 px-4 py-2 text-sm shadow-sm backdrop-blur',
+      'flex items-center gap-2 border-b border-border/50 bg-background/60 px-4 py-3 text-sm shadow-sm backdrop-blur',
       className
     )}
     {...props}

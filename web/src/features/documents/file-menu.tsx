@@ -27,8 +27,8 @@ export const FileMenu = ({ showGrid, onShowGridChange }: FileMenuProps) => {
   return (
     <>
       <DropdownMenuRoot open={open} onOpenChange={setOpen}>
-        <DropdownMenuTrigger>
-          <Button variant="ghost" size="sm">File</Button>
+        <DropdownMenuTrigger showChevron className="rounded-full border border-border/60 bg-background/50 px-4 py-2 hover:bg-muted/20 transition-colors">
+          <span className="text-sm font-medium text-surface">File</span>
         </DropdownMenuTrigger>
         <DropdownMenuContent>
           <DropdownMenuItem onSelect={() => setDialogOpen(true)}>New…</DropdownMenuItem>

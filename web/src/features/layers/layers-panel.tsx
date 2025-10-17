@@ -550,9 +550,6 @@ export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelPro
       <div ref={scrollRef} className="relative flex-1 overflow-auto px-2 py-2">
         {renderRows()}
       </div>
-      <footer className="border-t border-border/10 px-4 py-3 text-[11px] text-muted">
-        Drag to reorder, double-click to rename, right-click for actions.
-      </footer>
       {toast && (
         <div className="pointer-events-none absolute bottom-4 left-1/2 w-[min(90%,240px)] -translate-x-1/2 rounded-md border border-border/40 bg-background/80 px-3 py-2 text-center text-xs text-muted">
           {toast}

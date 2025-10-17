@@ -26,13 +26,6 @@ export const ViewportControls = () => {
       >
         +
       </IconButton>
-      <IconButton
-        label="Reset zoom"
-        variant="ghost"
-        onClick={() => dispatch({ type: 'update', viewport: { zoom: 1, offsetX: 0, offsetY: 0 } })}
-      >
-        1:1
-      </IconButton>
     </div>
   );
 };

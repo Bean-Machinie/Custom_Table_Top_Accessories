@@ -75,8 +75,12 @@ export const UserMenu = () => {
   return (
     <div className="relative flex flex-col items-end gap-1">
       <DropdownMenuRoot>
-        <DropdownMenuTrigger label={`Open account menu for ${displayName}`} className="focus-visible:focus-ring">
-          <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-border/60 bg-muted/10 text-sm font-semibold text-surface">
+        <DropdownMenuTrigger
+          showChevron
+          label={`Open account menu for ${displayName}`}
+          className="rounded-full border border-border/60 bg-background/50 px-3 py-2 hover:bg-muted/20 transition-colors gap-2"
+        >
+          <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-border/60 bg-muted/10 text-sm font-semibold text-surface">
             {avatarUrl ? (
               <img src={avatarUrl} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
             ) : (
@@ -94,10 +98,38 @@ export const UserMenu = () => {
             )}
           </div>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={handleProfile}>User Profile</DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleAppearance}>Appearance</DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={handleProfile}
+            icon={
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+              </svg>
+            }
+          >
+            User Profile
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={handleAppearance}
+            icon={
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 26 26" strokeWidth="1.5" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 11.25v8.25a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5v-8.25M12 4.875A2.625 2.625 0 1 0 9.375 7.5H12m0-2.625V7.5m0-2.625A2.625 2.625 0 1 1 14.625 7.5H12m0 0V21m-8.625-9.75h18c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125h-18c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
+              </svg>
+            }
+          >
+            Appearance
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={handleSignOut}>Sign out</DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={handleSignOut}
+            className="!bg-danger/10 text-danger hover:!bg-danger/20 focus:!bg-danger/20 active:!bg-danger/25 data-[highlighted]:!bg-danger/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/30"
+            icon={
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="!text-danger">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+              </svg>
+            }
+          >
+            <span className="!text-danger">Sign out</span>
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenuRoot>
       {error && (
