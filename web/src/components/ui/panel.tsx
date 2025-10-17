@@ -24,11 +24,20 @@ export const Panel = forwardRef<HTMLDivElement, PanelProps>(
 
 Panel.displayName = 'Panel';
 
-export const Sidebar = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
+export const Sidebar = ({ className, children, ...props }: HTMLAttributes<HTMLDivElement>) => (
   <aside
-    className={clsx('flex h-full w-72 flex-col gap-4 border-l border-border/40 bg-background/40 p-4', className)}
+    className={clsx(
+      'relative flex h-full w-80 max-w-[22rem] flex-col gap-4 border-l border-border/20 bg-background/70 p-4 text-surface shadow-[inset_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur',
+      className
+    )}
     {...props}
-  />
+  >
+    <div
+      className="pointer-events-none absolute left-0 top-0 h-full w-px bg-gradient-to-b from-transparent via-primary/30 to-transparent"
+      aria-hidden
+    />
+    {children}
+  </aside>
 );
 
 export const Toolbar = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (

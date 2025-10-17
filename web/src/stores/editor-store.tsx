@@ -9,6 +9,14 @@ import type {
 import { createContext, Dispatch, ReactNode, useContext, useReducer } from 'react';
 
 import { nanoid } from '../lib/nanoid';
+import {
+  cascadeVisibility,
+  duplicateLayerBranch,
+  ensureBaseCanvasInvariant,
+  moveLayer,
+  removeLayerBranch,
+  toggleCollapse
+} from '../lib/layer-tree';
 import { defaultTransform, resizeTransform } from '../lib/transform';
 
 interface EditorState {
@@ -25,7 +33,18 @@ type EditorAction =
   | { type: 'update-transform'; documentId: string; layerId: string; transform: Transform }
   | { type: 'add-layer'; documentId: string; layer: Layer }
   | { type: 'remove-layer'; documentId: string; layerId: string }
-  | { type: 'reorder-layer'; documentId: string; layerId: string; direction: 'up' | 'down' }
+  | { type: 'remove-layers'; documentId: string; layerIds: string[] }
+  | {
+      type: 'move-layer';
+      documentId: string;
+      layerId: string;
+      targetParentId: string | null;
+      targetIndex: number;
+    }
+  | { type: 'group-layers'; documentId: string; layerIds: string[]; name?: string }
+  | { type: 'ungroup-layer'; documentId: string; layerId: string }
+  | { type: 'toggle-layer-collapse'; documentId: string; layerId: string; collapsed: boolean }
+  | { type: 'duplicate-layer'; documentId: string; layerId: string }
   | { type: 'mark-clean'; documentId: string };
 
 const EditorStateContext = createContext<EditorState | undefined>(undefined);
@@ -37,8 +56,6 @@ const ensureDocument = (state: EditorState, documentId: string) => {
   return document;
 };
 
-const sortLayers = (layers: Layer[]) => [...layers].sort((a, b) => a.order - b.order);
-
 const createBaseLayer = (width: number, height: number): Layer => ({
   id: nanoid(),
   name: 'Base Canvas',
@@ -46,6 +63,8 @@ const createBaseLayer = (width: number, height: number): Layer => ({
   order: 0,
   visible: true,
   locked: true,
+  parentId: null,
+  collapsed: false,
   transform: resizeTransform(defaultTransform(width, height), width, height),
   assetUrl: undefined
 });
@@ -75,6 +94,15 @@ const createEmptyState = (): EditorState => ({
   activeDocumentId: null,
   documents: {},
   dirty: new Set()
+});
+
+const withDirty = (state: EditorState, documentId: string, document: FrameDocument): EditorState => ({
+  ...state,
+  documents: {
+    ...state.documents,
+    [document.id]: document
+  },
+  dirty: new Set(state.dirty).add(documentId)
 });
 
 const editorReducer = (state: EditorState, action: EditorAction): EditorState => {
@@ -108,89 +136,127 @@ const editorReducer = (state: EditorState, action: EditorAction): EditorState =>
     }
     case 'update-layer': {
       const document = ensureDocument(state, action.documentId);
-      const layers = document.layers.map((layer) =>
-        layer.id === action.layerId ? { ...layer, ...action.layer } : layer
-      );
-      return {
-        ...state,
-        documents: {
-          ...state.documents,
-          [document.id]: {
-            ...document,
-            layers: sortLayers(layers)
-          }
-        },
-        dirty: new Set(state.dirty).add(document.id)
-      };
+      const target = document.layers.find((layer) => layer.id === action.layerId);
+      if (!target) return state;
+      let layers: Layer[];
+      if (target.type === 'base') {
+        layers = document.layers.map((layer) =>
+          layer.id === target.id
+            ? { ...layer, name: 'Base Canvas', parentId: null, locked: true, visible: true }
+            : layer
+        );
+      } else {
+        layers = document.layers.map((layer) =>
+          layer.id === target.id ? { ...layer, ...action.layer } : layer
+        );
+        if (target.type === 'group' && action.layer.visible !== undefined) {
+          layers = cascadeVisibility(layers, target.id, Boolean(action.layer.visible));
+        }
+      }
+      const normalized = ensureBaseCanvasInvariant(layers);
+      return withDirty(state, document.id, { ...document, layers: normalized });
     }
     case 'update-transform': {
       const document = ensureDocument(state, action.documentId);
       const layers = document.layers.map((layer) =>
         layer.id === action.layerId ? { ...layer, transform: action.transform } : layer
       );
-      return {
-        ...state,
-        documents: {
-          ...state.documents,
-          [document.id]: {
-            ...document,
-            layers
-          }
-        },
-        dirty: new Set(state.dirty).add(document.id)
-      };
+      return withDirty(state, document.id, {
+        ...document,
+        layers: ensureBaseCanvasInvariant(layers)
+      });
     }
     case 'add-layer': {
       const document = ensureDocument(state, action.documentId);
-      return {
-        ...state,
-        documents: {
-          ...state.documents,
-          [document.id]: {
-            ...document,
-            layers: sortLayers([...document.layers, action.layer])
-          }
-        },
-        dirty: new Set(state.dirty).add(document.id)
-      };
+      const layers = ensureBaseCanvasInvariant([...document.layers, action.layer]);
+      return withDirty(state, document.id, { ...document, layers });
     }
     case 'remove-layer': {
       const document = ensureDocument(state, action.documentId);
-      const layers = document.layers.filter((layer) => layer.id !== action.layerId);
-      return {
-        ...state,
-        documents: {
-          ...state.documents,
-          [document.id]: {
-            ...document,
-            layers: sortLayers(layers)
-          }
-        },
-        dirty: new Set(state.dirty).add(document.id)
-      };
+      const layer = document.layers.find((entry) => entry.id === action.layerId);
+      if (!layer || layer.type === 'base') return state;
+      const layers = removeLayerBranch(document.layers, action.layerId);
+      return withDirty(state, document.id, { ...document, layers });
     }
-    case 'reorder-layer': {
+    case 'remove-layers': {
       const document = ensureDocument(state, action.documentId);
-      const layers = sortLayers(document.layers);
-      const index = layers.findIndex((layer) => layer.id === action.layerId);
-      if (index < 0) return state;
-      const swapWith = action.direction === 'up' ? index - 1 : index + 1;
-      if (swapWith < 0 || swapWith >= layers.length) return state;
-      const newLayers = [...layers];
-      const tempOrder = newLayers[index].order;
-      newLayers[index] = { ...newLayers[index], order: newLayers[swapWith].order };
-      newLayers[swapWith] = { ...newLayers[swapWith], order: tempOrder };
-      return {
-        ...state,
-        documents: {
-          ...state.documents,
-          [document.id]: {
-            ...document,
-            layers: sortLayers(newLayers)
-          }
-        },
-        dirty: new Set(state.dirty).add(document.id)
+      let layers = document.layers;
+      for (const layerId of action.layerIds) {
+        const target = layers.find((layer) => layer.id === layerId);
+        if (!target || target.type === 'base') continue;
+        layers = removeLayerBranch(layers, layerId);
+      }
+      return withDirty(state, document.id, { ...document, layers });
+    }
+    case 'move-layer': {
+      const document = ensureDocument(state, action.documentId);
+      const layer = document.layers.find((entry) => entry.id === action.layerId);
+      if (!layer || layer.type === 'base') return state;
+      const layers = moveLayer(
+        document.layers,
+        action.layerId,
+        action.targetParentId,
+        action.targetIndex
+      );
+      return withDirty(state, document.id, { ...document, layers });
+    }
+    case 'group-layers': {
+      const document = ensureDocument(state, action.documentId);
+      const uniqueIds = Array.from(new Set(action.layerIds));
+      const selected = uniqueIds
+        .map((id) => document.layers.find((layer) => layer.id === id))
+        .filter((layer): layer is Layer => Boolean(layer && layer.type !== 'base'));
+      if (selected.length < 2) return state;
+      const parentId = selected.every((layer) => layer.parentId === selected[0]?.parentId)
+        ? selected[0]?.parentId ?? null
+        : null;
+      const order = Math.min(...selected.map((layer) => layer.order));
+      const groupLayer: Layer = {
+        id: nanoid(),
+        name: action.name ?? 'Group',
+        type: 'group',
+        order,
+        visible: selected.every((layer) => layer.visible),
+        locked: false,
+        parentId,
+        collapsed: false,
+        transform: selected[0]?.transform ?? createBaseLayer(1, 1).transform
       };
+      const withoutSelected = document.layers.map((layer) =>
+        selected.some((entry) => entry.id === layer.id)
+          ? { ...layer, parentId: groupLayer.id }
+          : layer
+      );
+      const layers = ensureBaseCanvasInvariant([...withoutSelected, groupLayer]);
+      return withDirty(state, document.id, { ...document, layers });
+    }
+    case 'ungroup-layer': {
+      const document = ensureDocument(state, action.documentId);
+      const group = document.layers.find((layer) => layer.id === action.layerId && layer.type === 'group');
+      if (!group) return state;
+      const layers = document.layers.map((layer) => {
+        if (layer.parentId === group.id) {
+          return { ...layer, parentId: group.parentId };
+        }
+        return layer;
+      });
+      const remaining = ensureBaseCanvasInvariant(
+        layers.filter((layer) => layer.id !== group.id)
+      );
+      return withDirty(state, document.id, { ...document, layers: remaining });
+    }
+    case 'toggle-layer-collapse': {
+      const document = ensureDocument(state, action.documentId);
+      const layers = toggleCollapse(document.layers, action.layerId, action.collapsed);
+      return withDirty(state, document.id, {
+        ...document,
+        layers: ensureBaseCanvasInvariant(layers)
+      });
+    }
+    case 'duplicate-layer': {
+      const document = ensureDocument(state, action.documentId);
+      const layers = duplicateLayerBranch(document.layers, action.layerId, nanoid);
+      return withDirty(state, document.id, { ...document, layers });
     }
     case 'mark-clean': {
       const dirty = new Set(state.dirty);
@@ -239,6 +305,7 @@ export const createLayer = (params: {
   baseWidth: number;
   baseHeight: number;
   assetUrl?: string;
+  parentId?: string | null;
 }): Layer => ({
   id: nanoid(),
   name: params.name,
@@ -246,6 +313,12 @@ export const createLayer = (params: {
   order: params.order,
   visible: true,
   locked: params.type === 'base',
-  transform: resizeTransform(defaultTransform(params.baseWidth, params.baseHeight), params.baseWidth, params.baseHeight),
+  parentId: params.parentId ?? null,
+  collapsed: false,
+  transform: resizeTransform(
+    defaultTransform(params.baseWidth, params.baseHeight),
+    params.baseWidth,
+    params.baseHeight
+  ),
   assetUrl: params.assetUrl
 });

@@ -1,4 +1,4 @@
-export type LayerType = 'base' | 'image';
+export type LayerType = 'base' | 'image' | 'group';
 
 export interface Transform {
   x: number;
@@ -18,6 +18,8 @@ export interface Layer {
   visible: boolean;
   locked: boolean;
   transform: Transform;
+  parentId: string | null;
+  collapsed?: boolean;
   assetUrl?: string;
   thumbnailUrl?: string;
 }

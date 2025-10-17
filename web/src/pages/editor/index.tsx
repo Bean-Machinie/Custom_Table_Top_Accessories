@@ -3,9 +3,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { EditorPlayground } from '../../components/editor/playground';
 import { Sidebar, Toolbar } from '../../components/ui/panel';
 import { UserMenu } from '../../features/auth/user-menu';
-import { DocumentNavigator } from '../../features/documents/document-navigator';
 import { FileMenu } from '../../features/documents/file-menu';
 import { LayersPanel } from '../../features/layers/layers-panel';
+import { MinimapPlaceholder } from '../../features/minimap/minimap-placeholder';
 import { ViewportControls } from '../../features/viewports/viewport-controls';
 import { useEditorState } from '../../stores/editor-store';
 import { useAuth } from '../../stores/auth-store';
@@ -15,11 +15,11 @@ const EditorPage = () => {
   const { activeDocumentId, documents } = useEditorState();
   const auth = useAuth();
   const persistence = useEditorPersistence();
-  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>([]);
   const [showGrid, setShowGrid] = useState(true);
 
   useEffect(() => {
-    setSelectedLayerId(null);
+    setSelectedLayerIds([]);
   }, [activeDocumentId]);
 
   const activeDocument = useMemo(() => {
@@ -79,8 +79,8 @@ const EditorPage = () => {
           {activeDocument ? (
             <EditorPlayground
               document={activeDocument}
-              selectedLayerId={selectedLayerId}
-              onSelectLayer={setSelectedLayerId}
+              selectedLayerIds={selectedLayerIds}
+              onSelectLayers={setSelectedLayerIds}
               showGrid={showGrid}
             />
           ) : (
@@ -90,8 +90,11 @@ const EditorPage = () => {
           )}
         </div>
         <Sidebar>
-          <DocumentNavigator />
-          <LayersPanel selectedLayerId={selectedLayerId} onSelectLayer={setSelectedLayerId} />
+          <MinimapPlaceholder />
+          <LayersPanel
+            selectedLayerIds={selectedLayerIds}
+            onSelectLayers={(updater) => setSelectedLayerIds((prev) => updater(prev))}
+          />
         </Sidebar>
       </div>
     </div>
