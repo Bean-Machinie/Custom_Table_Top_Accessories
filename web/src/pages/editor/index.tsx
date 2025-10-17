@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { EditorPlayground } from '../../components/editor/playground';
 import { Sidebar, Toolbar } from '../../components/ui/panel';
 import { UserMenu } from '../../features/auth/user-menu';
 import { FileMenu } from '../../features/documents/file-menu';
 import { LayersPanel } from '../../features/layers/layers-panel';
-import { MinimapPlaceholder } from '../../features/minimap/minimap-placeholder';
+import { Minimap } from '../../features/minimap/minimap';
 import { ViewportControls } from '../../features/viewports/viewport-controls';
 import { useEditorState } from '../../stores/editor-store';
 import { useAuth } from '../../stores/auth-store';
@@ -17,6 +17,7 @@ const EditorPage = () => {
   const persistence = useEditorPersistence();
   const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>([]);
   const [showGrid, setShowGrid] = useState(true);
+  const playgroundContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setSelectedLayerIds([]);
@@ -76,6 +77,7 @@ const EditorPage = () => {
               onSelectLayers={setSelectedLayerIds}
               showGrid={showGrid}
               onToggleGrid={() => setShowGrid(!showGrid)}
+              playgroundContainerRef={playgroundContainerRef}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-muted">
@@ -89,7 +91,9 @@ const EditorPage = () => {
           )}
         </div>
         <Sidebar>
-          <MinimapPlaceholder />
+          {activeDocument && (
+            <Minimap document={activeDocument} containerRef={playgroundContainerRef} />
+          )}
           <LayersPanel
             selectedLayerIds={selectedLayerIds}
             onSelectLayers={(updater) => setSelectedLayerIds((prev) => updater(prev))}

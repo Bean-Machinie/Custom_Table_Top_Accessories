@@ -15,11 +15,16 @@ import { createAssetStoreAdapter } from '../../adapters/asset-adapter';
 import { flattenLayersForRender, findLayerById } from '../../lib/layer-tree';
 import { transformToCss } from '../../lib/transform';
 import { zoomAboutPoint, clampZoom, DEFAULT_ZOOM_CONFIG } from '../../lib/zoom-utils';
+import { constrainViewportWithElasticity } from '../../lib/bounds-utils';
 import { createLayer, useEditorDispatch } from '../../stores/editor-store';
 import { useAuth } from '../../stores/auth-store';
 import { useViewportDispatch, useViewportState } from '../../stores/viewport-store';
 import { useInertialPan } from '../../hooks/use-inertial-pan';
 import { PlaygroundHud } from './playground-hud';
+
+export interface EditorPlaygroundRef {
+  containerRef: React.RefObject<HTMLDivElement>;
+}
 
 interface EditorPlaygroundProps {
   document: FrameDocument;
@@ -27,6 +32,7 @@ interface EditorPlaygroundProps {
   onSelectLayers: (layerIds: string[]) => void;
   showGrid: boolean;
   onToggleGrid?: () => void;
+  playgroundContainerRef?: React.RefObject<HTMLDivElement>;
 }
 
 type PointerMode =
@@ -41,7 +47,8 @@ export const EditorPlayground = ({
   selectedLayerIds,
   onSelectLayers,
   showGrid,
-  onToggleGrid
+  onToggleGrid,
+  playgroundContainerRef
 }: EditorPlaygroundProps) => {
   const viewport = useViewportState();
   const viewportDispatch = useViewportDispatch();
@@ -52,7 +59,8 @@ export const EditorPlayground = ({
     () => createAssetStoreAdapter({ userId: user?.id, remoteEnabled }),
     [user?.id, remoteEnabled]
   );
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const localContainerRef = useRef<HTMLDivElement | null>(null);
+  const containerRef = playgroundContainerRef || localContainerRef;
   const [pointerMode, setPointerMode] = useState<PointerMode>({ type: 'idle' });
   const [spacePressed, setSpacePressed] = useState(false);
   const liveRegionRef = useRef<HTMLDivElement | null>(null);
@@ -194,18 +202,31 @@ export const EditorPlayground = ({
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (pointerMode.type === 'pan') {
+    if (pointerMode.type === 'pan' && containerRef.current) {
       // Track velocity for inertia
       trackVelocity(event.clientX, event.clientY);
 
       const dx = (event.clientX - pointerMode.startX) / viewport.zoom;
       const dy = (event.clientY - pointerMode.startY) / viewport.zoom;
+
+      const newOffsetX = pointerMode.offsetX + dx;
+      const newOffsetY = pointerMode.offsetY + dy;
+
+      // Apply elastic bounds
+      const rect = containerRef.current.getBoundingClientRect();
+      const constrained = constrainViewportWithElasticity(
+        newOffsetX,
+        newOffsetY,
+        document.width,
+        document.height,
+        rect.width,
+        rect.height,
+        viewport.zoom
+      );
+
       viewportDispatch({
         type: 'update',
-        viewport: {
-          offsetX: pointerMode.offsetX + dx,
-          offsetY: pointerMode.offsetY + dy
-        }
+        viewport: constrained
       });
     }
   };
@@ -275,6 +296,47 @@ export const EditorPlayground = ({
   const handleDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
     event.preventDefault();
   };
+
+  // Auto-fit to screen on document load
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return; // Container not ready yet
+
+    viewportDispatch({
+      type: 'zoom-preset',
+      preset: 'fit',
+      contentWidth: document.width,
+      contentHeight: document.height,
+      containerWidth: rect.width,
+      containerHeight: rect.height
+    });
+  }, [document.id, document.width, document.height, viewportDispatch]);
+
+  // Re-fit on window resize
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const handleResize = () => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+
+      viewportDispatch({
+        type: 'zoom-preset',
+        preset: 'fit',
+        contentWidth: document.width,
+        contentHeight: document.height,
+        containerWidth: rect.width,
+        containerHeight: rect.height
+      });
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [document.width, document.height, viewportDispatch]);
 
   const layers = useMemo(() => flattenLayersForRender(document.layers), [document.layers]);
   const visibleLayers = layers.filter((layer) => layer.type !== 'group' && layer.visible);
