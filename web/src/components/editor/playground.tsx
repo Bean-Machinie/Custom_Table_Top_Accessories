@@ -14,6 +14,7 @@ import {
 import { createAssetStoreAdapter } from '../../adapters/asset-adapter';
 import { transformToCss } from '../../lib/transform';
 import { createLayer, useEditorDispatch } from '../../stores/editor-store';
+import { useAuth } from '../../stores/auth-store';
 import { useViewportDispatch, useViewportState } from '../../stores/viewport-store';
 
 interface EditorPlaygroundProps {
@@ -36,11 +37,17 @@ export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, sho
   const viewport = useViewportState();
   const viewportDispatch = useViewportDispatch();
   const dispatch = useEditorDispatch();
-  const adapter = useMemo(() => createAssetStoreAdapter(), []);
+  const { mode, status, user } = useAuth();
+  const remoteEnabled = mode === 'auth' && status === 'authenticated' && Boolean(user);
+  const adapter = useMemo(
+    () => createAssetStoreAdapter({ userId: user?.id, remoteEnabled }),
+    [user?.id, remoteEnabled]
+  );
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [pointerMode, setPointerMode] = useState<PointerMode>({ type: 'idle' });
   const [spacePressed, setSpacePressed] = useState(false);
   const liveRegionRef = useRef<HTMLDivElement | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -132,6 +139,7 @@ export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, sho
     if (!event.dataTransfer.files.length) return;
     const file = event.dataTransfer.files[0];
     try {
+      setUploadError(null);
       const url = await adapter.upload(file);
       const layer = createLayer({
         name: file.name,
@@ -144,7 +152,7 @@ export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, sho
       dispatch({ type: 'add-layer', documentId: document.id, layer });
     } catch (error) {
       console.error('Failed to upload dropped asset', error);
-      alert('Unable to upload image. Check your Supabase configuration.');
+      setUploadError('Unable to upload the image. Please try again or verify your Supabase configuration.');
     }
   };
 
@@ -200,6 +208,14 @@ export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, sho
           </div>
         </div>
       </div>
+      {uploadError && (
+        <div
+          role="alert"
+          className="pointer-events-none absolute bottom-4 left-1/2 w-[min(90%,400px)] -translate-x-1/2 rounded-md border border-danger/40 bg-danger/10 px-4 py-2 text-center text-xs text-danger"
+        >
+          {uploadError}
+        </div>
+      )}
     </div>
   );
 };

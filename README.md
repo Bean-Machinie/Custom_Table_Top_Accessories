@@ -32,8 +32,11 @@ Copy `.env.example` to `.env` and populate with your Supabase project credential
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-public-anon-key
 VITE_SUPABASE_BUCKET=assets
+VITE_SUPABASE_STORAGE_PATH=uploads
 VITE_DEFAULT_PROJECT_NAME=Bean Machine
 ```
+
+When the environment variables are omitted the application runs in demo mode with local-only persistence. Configure the Supabase values to enable authentication, per-user frames, and asset uploads.
 
 ## Project Structure
 
