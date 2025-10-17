@@ -40,13 +40,6 @@ const EditorPage = () => {
       : null,
     persistence.saveError
       ? { id: 'save-error', tone: 'error' as const, message: persistence.saveError }
-      : null,
-    persistence.lastSavedAt
-      ? {
-          id: 'last-saved',
-          tone: 'info' as const,
-          message: `Last saved ${new Date(persistence.lastSavedAt).toLocaleTimeString()}`
-        }
       : null
   ].filter(Boolean) as { id: string; tone: 'info' | 'error'; message: string }[];
 
@@ -75,7 +68,7 @@ const EditorPage = () => {
         </div>
       </Toolbar>
       <div className="flex h-full flex-1 overflow-hidden">
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="relative flex flex-1 flex-col overflow-hidden">
           {activeDocument ? (
             <EditorPlayground
               document={activeDocument}
@@ -86,6 +79,11 @@ const EditorPage = () => {
           ) : (
             <div className="flex flex-1 items-center justify-center text-muted">
               Create a document from File → New to begin designing.
+            </div>
+          )}
+          {persistence.lastSavedAt && (
+            <div className="pointer-events-none absolute bottom-2 left-2 select-none text-xs text-muted/60">
+              Last saved {new Date(persistence.lastSavedAt).toLocaleTimeString()}
             </div>
           )}
         </div>
