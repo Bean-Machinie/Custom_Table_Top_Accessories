@@ -6,20 +6,23 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent as ReactChangeEvent,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
-  type ReactNode
+  type ReactNode,
+  type SVGProps
 } from 'react';
 
-import { AddLayerButton } from './add-layer-button';
+import { createAssetStoreAdapter } from '../../adapters/asset-adapter';
 import {
   collectDescendantIds,
   flattenLayerTree,
   findLayerById,
   getLayerAncestors
 } from '../../lib/layer-tree';
-import { useEditorDispatch, useEditorState } from '../../stores/editor-store';
+import { useAuth } from '../../stores/auth-store';
+import { createLayer, useEditorDispatch, useEditorState } from '../../stores/editor-store';
 
 const ROW_HEIGHT = 40;
 const INDENT_PER_LEVEL = 16;
@@ -43,6 +46,29 @@ interface DragState {
   position: 'before' | 'after' | 'inside';
 }
 
+const getImageDimensions = (file: File): Promise<{ width: number; height: number }> =>
+  new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      resolve({ width: image.naturalWidth || 1, height: image.naturalHeight || 1 });
+      URL.revokeObjectURL(url);
+    };
+    image.onerror = (error) => {
+      URL.revokeObjectURL(url);
+      reject(error);
+    };
+    image.src = url;
+  });
+
+const fitWithin = (width: number, height: number, maxWidth: number, maxHeight: number) => {
+  if (width <= 0 || height <= 0) {
+    return { width: Math.max(1, Math.min(maxWidth, 512)), height: Math.max(1, Math.min(maxHeight, 512)) };
+  }
+  const scale = Math.min(1, maxWidth / width, maxHeight / height);
+  return { width: width * scale, height: height * scale };
+};
+
 export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelProps) => {
   const { activeDocumentId, documents } = useEditorState();
   const dispatch = useEditorDispatch();
@@ -58,8 +84,17 @@ export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelPro
   const [toast, setToast] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const document = activeDocumentId ? documents[activeDocumentId] ?? null : null;
+  const { mode, status, user } = useAuth();
+  const remoteEnabled = mode === 'auth' && status === 'authenticated' && Boolean(user);
+  const assetAdapter = useMemo(
+    () => createAssetStoreAdapter({ userId: user?.id, remoteEnabled }),
+    [remoteEnabled, user?.id]
+  );
 
   const rows: FlattenedRow[] = useMemo(() => {
     if (!document) return [];
@@ -72,6 +107,20 @@ export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelPro
       ancestors: getLayerAncestors(document.layers, entry.layer.id)
     }));
   }, [document]);
+
+  const primarySelectedLayerId = anchorId ?? (selectedLayerIds.length > 0 ? selectedLayerIds[selectedLayerIds.length - 1] : null);
+
+  const primaryLayer = useMemo(() => {
+    if (!document || !primarySelectedLayerId) return null;
+    return findLayerById(document.layers, primarySelectedLayerId) ?? null;
+  }, [document, primarySelectedLayerId]);
+
+  const lockedContext = useMemo(() => {
+    if (!document || !primaryLayer) return false;
+    if (primaryLayer.type === 'base') return false;
+    if (primaryLayer.locked) return true;
+    return getLayerAncestors(document.layers, primaryLayer.id).some((ancestor) => ancestor.locked);
+  }, [document, primaryLayer]);
 
   const shouldVirtualize = rows.length > 200;
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: rows.length });
@@ -101,6 +150,10 @@ export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelPro
       renameInputRef.current?.select();
     }
   }, [renamingId]);
+
+  useEffect(() => {
+    setUploadError(null);
+  }, [document?.id]);
 
   useEffect(() => {
     if (!toast) return;
@@ -165,9 +218,182 @@ export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelPro
     setRenamingId(null);
   }, []);
 
+  const getNextName = useCallback(
+    (prefix: string) => {
+      if (!document) {
+        return `${prefix} 1`;
+      }
+      let max = 0;
+      for (const layer of document.layers) {
+        const name = layer.name.trim();
+        if (!name.startsWith(prefix)) continue;
+        const remainder = name.slice(prefix.length).trim();
+        const numeric = Number.parseInt(remainder, 10);
+        if (!Number.isNaN(numeric)) {
+          max = Math.max(max, numeric);
+        }
+      }
+      return `${prefix} ${max + 1}`;
+    },
+    [document]
+  );
+
+  const resolveInsertion = useCallback(
+    (reference: Layer | null) => {
+      if (!document) {
+        return { parentId: null, order: 0 };
+      }
+      if (!reference || reference.type === 'base') {
+        const siblings = document.layers.filter(
+          (layer) => (layer.parentId ?? null) === null && layer.type !== 'base'
+        );
+        if (siblings.length === 0) {
+          return { parentId: null, order: 0 };
+        }
+        const minOrder = Math.min(...siblings.map((layer) => layer.order));
+        return { parentId: null, order: minOrder - 0.1 };
+      }
+      return { parentId: reference.parentId ?? null, order: reference.order - 0.1 };
+    },
+    [document]
+  );
+
+  const focusLayer = useCallback(
+    (layerId: string) => {
+      onSelectLayers(() => [layerId]);
+      setAnchorId(layerId);
+    },
+    [onSelectLayers]
+  );
+
+  const ensureCanModify = useCallback(() => {
+    if (!document) {
+      setToast('Open or create a canvas to add new layers.');
+      return false;
+    }
+    if (lockedContext) {
+      setToast('Unlock the parent group to add new layers.');
+      return false;
+    }
+    return true;
+  }, [document, lockedContext]);
+
+  const handleCreateTransparentLayer = useCallback(() => {
+    if (!ensureCanModify() || !document) return;
+    const reference = primaryLayer && primaryLayer.type !== 'base' ? primaryLayer : null;
+    const { parentId, order } = resolveInsertion(reference);
+    const layer = createLayer({
+      name: getNextName('Layer'),
+      type: 'image',
+      order,
+      baseWidth: document.width,
+      baseHeight: document.height,
+      parentId: parentId ?? undefined
+    });
+    dispatch({ type: 'add-layer', documentId: document.id, layer });
+    setUploadError(null);
+    focusLayer(layer.id);
+  }, [dispatch, document, ensureCanModify, focusLayer, getNextName, primaryLayer, resolveInsertion]);
+
+  const handleCreateGroup = useCallback(() => {
+    if (!ensureCanModify() || !document) return;
+    const reference = primaryLayer && primaryLayer.type !== 'base' ? primaryLayer : null;
+    const { parentId, order } = resolveInsertion(reference);
+    const groupLayer = createLayer({
+      name: getNextName('Group'),
+      type: 'group',
+      order,
+      baseWidth: document.width,
+      baseHeight: document.height,
+      parentId: parentId ?? undefined
+    });
+    dispatch({ type: 'add-layer', documentId: document.id, layer: groupLayer });
+    focusLayer(groupLayer.id);
+  }, [dispatch, document, ensureCanModify, focusLayer, getNextName, primaryLayer, resolveInsertion]);
+
+  const handleRequestImageDialog = useCallback(() => {
+    if (!ensureCanModify() || !document || isUploading) return;
+    setUploadError(null);
+    fileInputRef.current?.click();
+  }, [document, ensureCanModify, isUploading]);
+
+  const handleImageChange = useCallback(
+    async (event: ReactChangeEvent<HTMLInputElement>) => {
+      if (!document) return;
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (!ensureCanModify()) {
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+        return;
+      }
+      setIsUploading(true);
+      setUploadError(null);
+      try {
+        const { width: naturalWidth, height: naturalHeight } = await getImageDimensions(file);
+        const fitted = fitWithin(naturalWidth, naturalHeight, document.width, document.height);
+        const width = Math.max(1, Math.round(fitted.width));
+        const height = Math.max(1, Math.round(fitted.height));
+        const reference = primaryLayer && primaryLayer.type !== 'base' ? primaryLayer : null;
+        const { parentId, order } = resolveInsertion(reference);
+        const url = await assetAdapter.upload(file);
+        const imageLayer = createLayer({
+          name: file.name,
+          type: 'image',
+          order,
+          baseWidth: width,
+          baseHeight: height,
+          parentId: parentId ?? undefined,
+          assetUrl: url
+        });
+        const x = Math.round((document.width - width) / 2);
+        const y = Math.round((document.height - height) / 2);
+        imageLayer.transform = { ...imageLayer.transform, width, height, x, y };
+        dispatch({ type: 'add-layer', documentId: document.id, layer: imageLayer });
+        focusLayer(imageLayer.id);
+      } catch (error) {
+        console.error('Failed to add image layer', error);
+        setUploadError('Unable to upload the image. Please try again or check your Supabase settings.');
+      } finally {
+        setIsUploading(false);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+      }
+    },
+    [assetAdapter, dispatch, document, ensureCanModify, focusLayer, primaryLayer, resolveInsertion]
+  );
+
+  const canAddLayers = Boolean(document) && !lockedContext;
+  const canAddImage = canAddLayers && !isUploading;
+  const creationButtonClasses = clsx(
+    'group relative flex h-10 flex-1 items-center justify-center rounded-lg border border-border/20 bg-surface/5 text-muted transition',
+    'hover:bg-surface/20 hover:text-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/60 active:bg-surface/25',
+    'disabled:cursor-not-allowed disabled:opacity-60'
+  );
+
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (!document) return;
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey) {
+        const key = event.key.toLowerCase();
+        if (key === 'n') {
+          event.preventDefault();
+          handleCreateTransparentLayer();
+          return;
+        }
+        if (key === 'i') {
+          event.preventDefault();
+          handleRequestImageDialog();
+          return;
+        }
+        if (key === 'f') {
+          event.preventDefault();
+          handleCreateGroup();
+          return;
+        }
+      }
       if ((event.key === 'Delete' || event.key === 'Backspace') && selectedLayerIds.length > 0) {
         event.preventDefault();
         dispatch({ type: 'remove-layers', documentId: document.id, layerIds: selectedLayerIds });
@@ -238,7 +464,15 @@ export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelPro
         });
       }
     },
-    [dispatch, document, rows, selectedLayerIds]
+    [
+      dispatch,
+      document,
+      handleCreateGroup,
+      handleCreateTransparentLayer,
+      handleRequestImageDialog,
+      rows,
+      selectedLayerIds
+    ]
   );
 
   const toggleVisibility = useCallback(
@@ -373,7 +607,7 @@ export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelPro
     if (rows.length <= 1) {
       return (
         <div className="flex h-full items-center justify-center px-6 text-center text-xs text-muted">
-          Drop an image or click + Add Layer to get started.
+          Drop an image or use the controls below to add your first layers.
         </div>
       );
     }
@@ -544,12 +778,67 @@ export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelPro
   return (
     <section className="relative flex h-full flex-1 flex-col overflow-hidden rounded-2xl bg-surface/20 text-surface shadow-lg">
       <header className="sticky top-0 z-20 flex items-center justify-between border-b border-border/20 bg-background/70 px-4 py-3 text-xs font-semibold uppercase tracking-[0.3em] text-muted">
-        {selectedLayerIds.length > 1 ? `${selectedLayerIds.length} SELECTED` : 'LAYERS'}
-        <AddLayerButton variant="compact" />
+        <span>{selectedLayerIds.length > 1 ? `${selectedLayerIds.length} SELECTED` : 'LAYERS'}</span>
+        <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-muted/70">
+          CTRL+SHIFT+N / I / F
+        </span>
       </header>
       <div ref={scrollRef} className="relative flex-1 overflow-auto px-2 py-2">
         {renderRows()}
       </div>
+      <footer className="border-t border-border/20 bg-background/80 px-3 py-3">
+        {uploadError && (
+          <div
+            role="alert"
+            className="mb-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+          >
+            {uploadError}
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            className={creationButtonClasses}
+            onClick={handleCreateTransparentLayer}
+            disabled={!canAddLayers}
+            aria-label="Add transparent layer"
+            title="Add Transparent Layer (Ctrl + Shift + N)"
+          >
+            <TransparentLayerIcon aria-hidden="true" className="h-6 w-6" />
+            <span className="sr-only">Add Transparent Layer (Ctrl + Shift + N)</span>
+          </button>
+          <button
+            type="button"
+            className={creationButtonClasses}
+            onClick={handleRequestImageDialog}
+            disabled={!canAddImage}
+            aria-label={isUploading ? 'Uploading image layer…' : 'Add image layer'}
+            title="Add Image Layer (Ctrl + Shift + I)"
+            aria-busy={isUploading}
+          >
+            {isUploading ? <Spinner /> : <ImageLayerIcon aria-hidden="true" className="h-6 w-6" />}
+            <span className="sr-only">Add Image Layer (Ctrl + Shift + I)</span>
+          </button>
+          <button
+            type="button"
+            className={creationButtonClasses}
+            onClick={handleCreateGroup}
+            disabled={!canAddLayers}
+            aria-label="Add folder"
+            title="Add Folder (Ctrl + Shift + F)"
+          >
+            <FolderIcon aria-hidden="true" className="h-6 w-6" />
+            <span className="sr-only">Add Folder (Ctrl + Shift + F)</span>
+          </button>
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handleImageChange}
+        />
+      </footer>
       {toast && (
         <div className="pointer-events-none absolute bottom-4 left-1/2 w-[min(90%,240px)] -translate-x-1/2 rounded-md border border-border/40 bg-background/80 px-3 py-2 text-center text-xs text-muted">
           {toast}
@@ -662,6 +951,64 @@ const MenuItem = ({
   >
     {children}
   </button>
+);
+
+const TransparentLayerIcon = ({ className, ...props }: SVGProps<SVGSVGElement>) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    aria-hidden="true"
+    className={clsx('h-6 w-6', className)}
+    {...props}
+  >
+    <path
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M18 9V4a1 1 0 0 0-1-1H8.914a1 1 0 0 0-.707.293L4.293 7.207A1 1 0 0 0 4 7.914V20a1 1 0 0 0 1 1h4M9 3v4a1 1 0 0 1-1 1H4m11 6v4m-2-2h4m3 0a5 5 0 1 1-10 0 5 5 0 0 1 10 0Z"
+    />
+  </svg>
+);
+
+const ImageLayerIcon = ({ className, ...props }: SVGProps<SVGSVGElement>) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    aria-hidden="true"
+    className={clsx('h-6 w-6', className)}
+    {...props}
+  >
+    <path
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="m3 16 5-7 6 6.5m6.5 2.5L16 13l-4.286 6M14 10h.01M4 19h16a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1Z"
+    />
+  </svg>
+);
+
+const FolderIcon = ({ className, ...props }: SVGProps<SVGSVGElement>) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    aria-hidden="true"
+    className={clsx('h-6 w-6', className)}
+    {...props}
+  >
+    <path
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M3 19V6a1 1 0 0 1 1-1h4.032a1 1 0 0 1 .768.36l1.9 2.28a1 1 0 0 0 .768.36H16a1 1 0 0 1 1 1v1M3 19l3-8h15l-3 8H3Z"
+    />
+  </svg>
+);
+
+const Spinner = () => (
+  <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-accent" aria-hidden="true" />
 );
 
 const GripIcon = () => (
