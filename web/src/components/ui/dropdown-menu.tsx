@@ -1,8 +1,10 @@
 import clsx from 'classnames';
 import {
   ComponentPropsWithoutRef,
-  createContext,
+  HTMLAttributes,
+  MouseEvent as ReactMouseEvent,
   ReactNode,
+  createContext,
   useCallback,
   useContext,
   useEffect,
@@ -41,6 +43,13 @@ export const DropdownMenuRoot = ({ children, open, defaultOpen = false, onOpenCh
   const itemsRef = useRef<HTMLElement[]>([]);
   const labelId = useId();
 
+  useEffect(() => {
+    if (!isOpen) {
+      itemsRef.current = [];
+      setActiveIndex(-1);
+    }
+  }, [isOpen]);
+
   const registerItem = useCallback((el: HTMLElement) => {
     const index = itemsRef.current.indexOf(el);
     if (index >= 0) return index;
@@ -70,13 +79,19 @@ const useDropdownContext = (component: string) => {
   return ctx;
 };
 
-export const DropdownMenuTrigger = ({ children }: { children: ReactNode }) => {
+interface DropdownMenuTriggerProps extends HTMLAttributes<HTMLSpanElement> {
+  children: ReactNode;
+  label?: string;
+}
+
+export const DropdownMenuTrigger = ({ children, label, className, ...props }: DropdownMenuTriggerProps) => {
   const { open, setOpen, triggerRef, setActiveIndex } = useDropdownContext('DropdownMenuTrigger');
 
   return (
     <span
       role="button"
       tabIndex={0}
+      aria-label={label}
       aria-haspopup="menu"
       aria-expanded={open}
       ref={triggerRef}
@@ -100,7 +115,8 @@ export const DropdownMenuTrigger = ({ children }: { children: ReactNode }) => {
           setOpen(!open);
         }
       }}
-      className="inline-flex"
+      className={clsx('inline-flex', className)}
+      {...props}
     >
       {children}
     </span>
@@ -110,9 +126,10 @@ export const DropdownMenuTrigger = ({ children }: { children: ReactNode }) => {
 export interface DropdownMenuContentProps {
   children: ReactNode;
   className?: string;
+  align?: 'start' | 'end';
 }
 
-export const DropdownMenuContent = ({ children, className }: DropdownMenuContentProps) => {
+export const DropdownMenuContent = ({ children, className, align = 'start' }: DropdownMenuContentProps) => {
   const { open, setOpen, triggerRef, activeIndex, setActiveIndex, labelledBy } = useDropdownContext('DropdownMenuContent');
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [style, setStyle] = useState<React.CSSProperties>({});
@@ -122,14 +139,19 @@ export const DropdownMenuContent = ({ children, className }: DropdownMenuContent
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
     const margin = 8;
+    const contentRect = contentRef.current?.getBoundingClientRect();
+    const width = contentRect?.width ?? 240;
+    const height = contentRect?.height ?? 220;
     let top = rect.bottom + margin;
-    let left = rect.left;
-    const preferredWidth = 240;
-    if (top + 220 > window.innerHeight) {
-      top = Math.max(rect.top - margin - 220, margin);
+    let left = align === 'end' ? rect.right - width : rect.left;
+    if (top + height > window.innerHeight) {
+      top = Math.max(rect.top - margin - height, margin);
     }
-    if (left + preferredWidth > window.innerWidth) {
-      left = Math.max(window.innerWidth - preferredWidth - margin, margin);
+    if (left + width > window.innerWidth) {
+      left = Math.max(window.innerWidth - width - margin, margin);
+    }
+    if (left < margin) {
+      left = margin;
     }
     setStyle({
       position: 'absolute',
@@ -137,7 +159,7 @@ export const DropdownMenuContent = ({ children, className }: DropdownMenuContent
       left: `${left + window.scrollX}px`
     });
     contentRef.current?.focus({ preventScroll: true });
-  }, [open, triggerRef]);
+  }, [align, open, triggerRef]);
 
   useEffect(() => {
     if (!open) return;
@@ -152,7 +174,7 @@ export const DropdownMenuContent = ({ children, className }: DropdownMenuContent
       }
       if (event.key === 'ArrowUp') {
         event.preventDefault();
-        setActiveIndex((index) => Math.max(index - 1, 0));
+        setActiveIndex((index) => (index <= 0 ? Number.MAX_SAFE_INTEGER : index - 1));
       }
       if (event.key === 'Home') {
         event.preventDefault();
@@ -179,6 +201,28 @@ export const DropdownMenuContent = ({ children, className }: DropdownMenuContent
     target?.focus({ preventScroll: true });
   }, [activeIndex, open]);
 
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (contentRef.current?.contains(target)) return;
+      if (triggerRef.current?.contains(target as Node)) return;
+      setOpen(false);
+    };
+    const handleFocusIn = (event: FocusEvent) => {
+      const target = event.target as Node;
+      if (contentRef.current?.contains(target)) return;
+      if (triggerRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('focusin', handleFocusIn);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('focusin', handleFocusIn);
+    };
+  }, [open, setOpen, triggerRef]);
+
   if (!open) return null;
 
   return (
@@ -203,6 +247,7 @@ export const DropdownMenuContent = ({ children, className }: DropdownMenuContent
 interface DropdownMenuItemProps extends ComponentPropsWithoutRef<'div'> {
   inset?: boolean;
   onSelect?: () => void;
+  disabled?: boolean;
 }
 
 export const DropdownMenuItem = ({
@@ -210,6 +255,8 @@ export const DropdownMenuItem = ({
   className,
   inset,
   onSelect,
+  onKeyDown,
+  disabled,
   ...props
 }: DropdownMenuItemProps) => {
   const { setOpen, registerItem, setActiveIndex } = useDropdownContext('DropdownMenuItem');
@@ -221,21 +268,31 @@ export const DropdownMenuItem = ({
     }
   }, [registerItem]);
 
+  const handleSelect = useCallback(
+    (event?: ReactMouseEvent<HTMLDivElement>) => {
+      if (disabled) {
+        event?.preventDefault();
+        return;
+      }
+      onSelect?.();
+      setOpen(false);
+    },
+    [disabled, onSelect, setOpen]
+  );
+
   return (
     <div
-      {...props}
       role="menuitem"
       ref={ref}
       tabIndex={-1}
       className={clsx(
-        'flex cursor-pointer select-none items-center rounded-md px-3 py-2 text-sm text-surface outline-none hover:bg-muted/20 focus:bg-muted/20',
+        'flex select-none items-center rounded-md px-3 py-2 text-sm text-surface outline-none focus-visible:focus-ring',
+        disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-muted/20 focus:bg-muted/20',
         inset && 'pl-8',
         className
       )}
-      onClick={() => {
-        onSelect?.();
-        setOpen(false);
-      }}
+      aria-disabled={disabled ? 'true' : undefined}
+      onClick={handleSelect}
       onMouseEnter={() => {
         if (!ref.current) return;
         setActiveIndex(() => {
@@ -244,6 +301,22 @@ export const DropdownMenuItem = ({
           return Array.from(items).indexOf(ref.current!);
         });
       }}
+      onFocus={() => {
+        if (!ref.current) return;
+        setActiveIndex(() => {
+          const items = ref.current?.parentElement?.querySelectorAll('[role="menuitem"]');
+          if (!items) return 0;
+          return Array.from(items).indexOf(ref.current!);
+        });
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          handleSelect();
+        }
+        onKeyDown?.(event);
+      }}
+      {...props}
     >
       {children}
     </div>

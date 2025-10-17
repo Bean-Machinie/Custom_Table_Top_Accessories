@@ -1,26 +1,52 @@
 :root {
-  --color-background: #0f1014;
-  --color-surface: #f8f9ff;
-  --color-primary: #8c5ef0;
-  --color-muted: rgba(248, 249, 255, 0.72);
-  --color-accent: #38bdf8;
-  --color-border: rgba(120, 126, 160, 0.4);
-  --color-danger: #ef4444;
   --radius-lg: 20px;
   --radius-md: 14px;
   --radius-sm: 8px;
-  --shadow-floating: 0px 12px 45px rgba(15, 16, 20, 0.18);
+  --color-danger: #ef4444;
+  --shadow-floating: 0px 18px 45px rgba(15, 16, 20, 0.24);
   --grid-color: rgba(94, 96, 120, 0.16);
 }
 
-[data-theme='dark'] {
+[data-theme='midnight-workshop'] {
   --color-background: #0f1014;
   --color-surface: #f8f9ff;
-  --color-muted: rgba(15, 16, 20, 0.72);
+  --color-primary: #8c5ef0;
+  --color-muted: rgba(248, 249, 255, 0.64);
+  --color-accent: #38bdf8;
+  --color-border: rgba(120, 126, 160, 0.4);
+  --shadow-floating: 0px 18px 45px rgba(12, 12, 18, 0.3);
+  --grid-color: rgba(94, 96, 120, 0.16);
 }
 
-[data-theme='light'] {
-  --color-background: #f8f9ff;
-  --color-surface: #15161d;
-  --color-muted: rgba(21, 22, 29, 0.72);
+[data-theme='aurora-green'] {
+  --color-background: #0d1f1a;
+  --color-surface: #f2fff9;
+  --color-primary: #2dd4bf;
+  --color-muted: rgba(242, 255, 249, 0.58);
+  --color-accent: #34d399;
+  --color-border: rgba(73, 150, 132, 0.45);
+  --shadow-floating: 0px 18px 45px rgba(8, 24, 20, 0.32);
+  --grid-color: rgba(76, 147, 128, 0.18);
+}
+
+[data-theme='velvet-night'] {
+  --color-background: #1a1025;
+  --color-surface: #fdf5ff;
+  --color-primary: #d946ef;
+  --color-muted: rgba(253, 245, 255, 0.58);
+  --color-accent: #f59e0b;
+  --color-border: rgba(122, 66, 156, 0.42);
+  --shadow-floating: 0px 18px 45px rgba(21, 9, 34, 0.35);
+  --grid-color: rgba(109, 62, 146, 0.2);
+}
+
+[data-theme='desert-clay'] {
+  --color-background: #fef3e7;
+  --color-surface: #20130c;
+  --color-primary: #ea580c;
+  --color-muted: rgba(32, 19, 12, 0.64);
+  --color-accent: #fb923c;
+  --color-border: rgba(163, 110, 74, 0.4);
+  --shadow-floating: 0px 18px 45px rgba(83, 54, 34, 0.2);
+  --grid-color: rgba(163, 110, 74, 0.2);
 }

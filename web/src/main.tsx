@@ -8,6 +8,8 @@ import { BrowserRouter } from 'react-router-dom';
 import AppRouter from './routes';
 import { AuthProvider } from './stores/auth-store';
 import { EditorProviders } from './stores/editor-providers';
+import { ProfileProvider } from './stores/profile-store';
+import { ThemeProvider } from './stores/theme-store';
 
 const rootEl = document.getElementById('root');
 
@@ -19,9 +21,13 @@ createRoot(rootEl).render(
   <StrictMode>
     <BrowserRouter>
       <AuthProvider>
-        <EditorProviders>
-          <AppRouter />
-        </EditorProviders>
+        <ThemeProvider>
+          <ProfileProvider>
+            <EditorProviders>
+              <AppRouter />
+            </EditorProviders>
+          </ProfileProvider>
+        </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>
   </StrictMode>

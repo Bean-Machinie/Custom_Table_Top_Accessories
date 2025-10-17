@@ -55,7 +55,8 @@ export const createDatabaseAdapter = (options: DatabaseAdapterOptions = {}): Dat
     async loadFrame(frameId) {
       if (supabase) {
         const baseQuery = supabase.from(framesTable).select('*').eq('id', frameId);
-        const { data, error } = ownerColumnAvailable && userId ? baseQuery.eq('owner_id', userId).maybeSingle() : baseQuery.maybeSingle();
+        const query = ownerColumnAvailable && userId ? baseQuery.eq('owner_id', userId) : baseQuery;
+        const { data, error } = await query.maybeSingle();
         if (error) {
           if (isMissingOwnerColumn(error) && ownerColumnAvailable) {
             ownerColumnAvailable = false;
