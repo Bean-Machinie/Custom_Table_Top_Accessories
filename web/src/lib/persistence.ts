@@ -1,10 +1,10 @@
 import type { DocumentStoreSnapshot, EditorViewportState } from '@shared/index';
 
-const snapshotKey = 'cta::document-store';
-const viewportKey = 'cta::viewport';
+const snapshotKey = (userId?: string) => `cta::document-store::${userId ?? 'demo'}`;
+const viewportKey = (userId?: string) => `cta::viewport::${userId ?? 'demo'}`;
 
-export const loadSnapshot = (): DocumentStoreSnapshot | null => {
-  const raw = localStorage.getItem(snapshotKey);
+export const loadSnapshot = (userId?: string): DocumentStoreSnapshot | null => {
+  const raw = localStorage.getItem(snapshotKey(userId));
   if (!raw) return null;
   try {
     return JSON.parse(raw) as DocumentStoreSnapshot;
@@ -14,12 +14,12 @@ export const loadSnapshot = (): DocumentStoreSnapshot | null => {
   }
 };
 
-export const persistSnapshot = (snapshot: DocumentStoreSnapshot) => {
-  localStorage.setItem(snapshotKey, JSON.stringify(snapshot));
+export const persistSnapshot = (snapshot: DocumentStoreSnapshot, userId?: string) => {
+  localStorage.setItem(snapshotKey(userId), JSON.stringify(snapshot));
 };
 
-export const loadViewport = (): EditorViewportState | null => {
-  const raw = localStorage.getItem(viewportKey);
+export const loadViewport = (userId?: string): EditorViewportState | null => {
+  const raw = localStorage.getItem(viewportKey(userId));
   if (!raw) return null;
   try {
     return JSON.parse(raw) as EditorViewportState;
@@ -29,6 +29,6 @@ export const loadViewport = (): EditorViewportState | null => {
   }
 };
 
-export const persistViewport = (viewport: EditorViewportState) => {
-  localStorage.setItem(viewportKey, JSON.stringify(viewport));
+export const persistViewport = (viewport: EditorViewportState, userId?: string) => {
+  localStorage.setItem(viewportKey(userId), JSON.stringify(viewport));
 };

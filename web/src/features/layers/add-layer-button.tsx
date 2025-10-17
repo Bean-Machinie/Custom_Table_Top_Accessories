@@ -3,13 +3,22 @@ import { ChangeEvent, useMemo, useRef, useState } from 'react';
 import { createAssetStoreAdapter } from '../../adapters/asset-adapter';
 import { Button } from '../../components/ui/button';
 import { createLayer, useEditorDispatch, useEditorState } from '../../stores/editor-store';
+import { useAuth } from '../../stores/auth-store';
 
 export const AddLayerButton = () => {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const dispatch = useEditorDispatch();
   const { activeDocumentId, documents } = useEditorState();
+  const { mode, status, user } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
-  const adapter = useMemo(() => createAssetStoreAdapter(), []);
+  const [error, setError] = useState<string | null>(null);
+
+  const remoteEnabled = mode === 'auth' && status === 'authenticated' && Boolean(user);
+
+  const adapter = useMemo(
+    () => createAssetStoreAdapter({ userId: user?.id, remoteEnabled }),
+    [user?.id, remoteEnabled]
+  );
 
   const handleChange = async (event: ChangeEvent<HTMLInputElement>) => {
     if (!activeDocumentId) return;
@@ -19,6 +28,7 @@ export const AddLayerButton = () => {
     if (!file) return;
     setIsLoading(true);
     try {
+      setError(null);
       const url = await adapter.upload(file);
       const layer = createLayer({
         name: file.name,
@@ -31,7 +41,7 @@ export const AddLayerButton = () => {
       dispatch({ type: 'add-layer', documentId: document.id, layer });
     } catch (error) {
       console.error('Failed to upload asset', error);
-      alert('Unable to upload image. Please check your Supabase configuration.');
+      setError('Unable to upload the image. Please try again or check your Supabase settings.');
     } finally {
       setIsLoading(false);
       if (inputRef.current) {
@@ -52,8 +62,13 @@ export const AddLayerButton = () => {
         {isLoading ? 'Uploading…' : '+ Add Layer'}
       </Button>
       <p className="text-xs text-muted">
-        Drop an image or use the button to add a new layer. Assets are uploaded to Supabase or stored locally when offline.
+        Drop an image or use the button to add a new layer. {remoteEnabled ? 'Assets are uploaded securely to your Supabase storage.' : 'Assets stay local in this demo session and are cleared when the browser storage resets.'}
       </p>
+      {error && (
+        <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          {error}
+        </div>
+      )}
     </div>
   );
 };

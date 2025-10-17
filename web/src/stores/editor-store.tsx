@@ -71,11 +71,17 @@ export const createFrameDocument = (input: CreateDocumentInput): FrameDocument =
   };
 };
 
+const createEmptyState = (): EditorState => ({
+  activeDocumentId: null,
+  documents: {},
+  dirty: new Set()
+});
+
 const editorReducer = (state: EditorState, action: EditorAction): EditorState => {
   switch (action.type) {
     case 'hydrate': {
       if (!action.snapshot) {
-        return state;
+        return createEmptyState();
       }
       return {
         activeDocumentId: action.snapshot.activeDocumentId,
@@ -196,11 +202,7 @@ const editorReducer = (state: EditorState, action: EditorAction): EditorState =>
   }
 };
 
-const initialState: EditorState = {
-  activeDocumentId: null,
-  documents: {},
-  dirty: new Set()
-};
+const initialState: EditorState = createEmptyState();
 
 export const EditorStoreProvider = ({ children }: { children: ReactNode }) => {
   const [state, dispatch] = useReducer(editorReducer, initialState);

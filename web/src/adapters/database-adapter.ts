@@ -1,4 +1,5 @@
 import type { FrameDocument } from '@shared/index';
+import type { PostgrestError } from '@supabase/supabase-js';
 
 import { getSupabaseClient } from './supabase-client';
 
@@ -10,17 +11,29 @@ export interface DatabaseAdapter {
 
 const framesTable = 'frames';
 
-export const createDatabaseAdapter = (): DatabaseAdapter => {
-  const supabase = (() => {
-    try {
-      return getSupabaseClient();
-    } catch (error) {
-      console.warn('Supabase unavailable, falling back to local cache.', error);
-      return null;
-    }
-  })();
+interface DatabaseAdapterOptions {
+  userId?: string;
+  remoteEnabled?: boolean;
+}
 
-  const localKey = 'cta::frames';
+const isMissingOwnerColumn = (error: PostgrestError | null) =>
+  Boolean(error && typeof error.message === 'string' && error.message.toLowerCase().includes('owner_id'));
+
+export const createDatabaseAdapter = (options: DatabaseAdapterOptions = {}): DatabaseAdapter => {
+  const { userId, remoteEnabled = false } = options;
+  const supabase = remoteEnabled
+    ? (() => {
+        try {
+          return getSupabaseClient();
+        } catch (error) {
+          console.warn('Supabase unavailable, using local persistence.', error);
+          return null;
+        }
+      })()
+    : null;
+
+  const localKey = `cta::frames::${userId ?? 'demo'}`;
+  let ownerColumnAvailable = Boolean(userId);
 
   const readLocal = (): FrameDocument[] => {
     const stored = localStorage.getItem(localKey);
@@ -41,12 +54,17 @@ export const createDatabaseAdapter = (): DatabaseAdapter => {
   return {
     async loadFrame(frameId) {
       if (supabase) {
-        const { data, error } = await supabase
-          .from(framesTable)
-          .select('*')
-          .eq('id', frameId)
-          .maybeSingle();
-        if (error) throw error;
+        const baseQuery = supabase.from(framesTable).select('*').eq('id', frameId);
+        const { data, error } = ownerColumnAvailable && userId ? baseQuery.eq('owner_id', userId).maybeSingle() : baseQuery.maybeSingle();
+        if (error) {
+          if (isMissingOwnerColumn(error) && ownerColumnAvailable) {
+            ownerColumnAvailable = false;
+            const retry = await supabase.from(framesTable).select('*').eq('id', frameId).maybeSingle();
+            if (retry.error) throw retry.error;
+            return (retry.data as FrameDocument | null) ?? null;
+          }
+          throw error;
+        }
         return (data as FrameDocument | null) ?? null;
       }
 
@@ -54,8 +72,18 @@ export const createDatabaseAdapter = (): DatabaseAdapter => {
     },
     async listFrames() {
       if (supabase) {
-        const { data, error } = await supabase.from(framesTable).select('*');
-        if (error) throw error;
+        const baseQuery = supabase.from(framesTable).select('*');
+        const query = ownerColumnAvailable && userId ? baseQuery.eq('owner_id', userId) : baseQuery;
+        const { data, error } = await query;
+        if (error) {
+          if (isMissingOwnerColumn(error) && ownerColumnAvailable) {
+            ownerColumnAvailable = false;
+            const retry = await supabase.from(framesTable).select('*');
+            if (retry.error) throw retry.error;
+            return (retry.data as FrameDocument[]) ?? [];
+          }
+          throw error;
+        }
         return (data as FrameDocument[]) ?? [];
       }
 
@@ -72,12 +100,25 @@ export const createDatabaseAdapter = (): DatabaseAdapter => {
       } satisfies FrameDocument;
 
       if (supabase) {
+        const payload = ownerColumnAvailable && userId ? { ...toPersist, owner_id: userId } : toPersist;
         const { data, error } = await supabase
           .from(framesTable)
-          .upsert(toPersist, { onConflict: 'id' })
+          .upsert(payload, { onConflict: 'id' })
           .select()
           .maybeSingle();
-        if (error) throw error;
+        if (error) {
+          if (isMissingOwnerColumn(error) && ownerColumnAvailable) {
+            ownerColumnAvailable = false;
+            const retry = await supabase
+              .from(framesTable)
+              .upsert(toPersist, { onConflict: 'id' })
+              .select()
+              .maybeSingle();
+            if (retry.error) throw retry.error;
+            return (retry.data as FrameDocument) ?? toPersist;
+          }
+          throw error;
+        }
         return (data as FrameDocument) ?? toPersist;
       }
 

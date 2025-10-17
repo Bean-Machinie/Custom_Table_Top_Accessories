@@ -34,16 +34,16 @@ const reducer = (state: ViewportState, action: ViewportAction): ViewportState =>
   }
 };
 
-export const ViewportProvider = ({ children }: { children: ReactNode }) => {
+export const ViewportProvider = ({ children, userId }: { children: ReactNode; userId?: string }) => {
   const [state, dispatch] = useReducer(reducer, defaultViewport);
 
   useEffect(() => {
-    dispatch({ type: 'hydrate', state: loadViewport() });
-  }, []);
+    dispatch({ type: 'hydrate', state: loadViewport(userId) });
+  }, [userId]);
 
   useEffect(() => {
-    persistViewport(state);
-  }, [state]);
+    persistViewport(state, userId);
+  }, [state, userId]);
 
   const memoState = useMemo(() => state, [state]);
 
