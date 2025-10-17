@@ -287,7 +287,7 @@ export const LayersPanel = ({ selectedLayerIds, onSelectLayers }: LayersPanelPro
     []
   );
 
-  const openContextMenu = useCallback((event: MouseEvent<HTMLDivElement>, layerId: string) => {
+  const openContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>, layerId: string) => {
     event.preventDefault();
     setContextMenu({ layerId, x: event.clientX, y: event.clientY });
   }, []);

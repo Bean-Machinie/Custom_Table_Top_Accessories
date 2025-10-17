@@ -3,7 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 
 const LandingPage = lazy(() => import('../pages/landing'));
 const EditorPage = lazy(() => import('../pages/editor'));
-const ProfilePage = lazy(() => import('../pages/profile'));
+const SettingsPage = lazy(() => import('../pages/settings'));
 const ProtectedRoute = lazy(() => import('./protected-route'));
 
 const AppRouter = () => (
@@ -12,7 +12,8 @@ const AppRouter = () => (
       <Route path="/" element={<LandingPage />} />
       <Route element={<ProtectedRoute />}>
         <Route path="/app" element={<EditorPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/profile" element={<Navigate to="/settings?panel=profile" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
