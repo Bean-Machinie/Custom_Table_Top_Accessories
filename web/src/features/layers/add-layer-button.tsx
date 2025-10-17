@@ -1,11 +1,18 @@
-import { ChangeEvent, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ReactNode, useMemo, useRef, useState } from 'react';
 
 import { createAssetStoreAdapter } from '../../adapters/asset-adapter';
 import { Button } from '../../components/ui/button';
 import { createLayer, useEditorDispatch, useEditorState } from '../../stores/editor-store';
 import { useAuth } from '../../stores/auth-store';
 
-export const AddLayerButton = () => {
+interface AddLayerButtonProps {
+  variant?: 'panel' | 'compact';
+  label?: string;
+  children?: ReactNode;
+  className?: string;
+}
+
+export const AddLayerButton = ({ variant = 'panel', label = '+ Add Layer', className, children }: AddLayerButtonProps) => {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const dispatch = useEditorDispatch();
   const { activeDocumentId, documents } = useEditorState();
@@ -30,10 +37,11 @@ export const AddLayerButton = () => {
     try {
       setError(null);
       const url = await adapter.upload(file);
+      const order = document.layers.filter((layer) => layer.type !== 'base').length;
       const layer = createLayer({
         name: file.name,
         type: 'image',
-        order: document.layers.length,
+        order,
         baseWidth: document.width / 2,
         baseHeight: document.height / 2,
         assetUrl: url
@@ -50,25 +58,43 @@ export const AddLayerButton = () => {
     }
   };
 
-  return (
-    <div className="flex flex-col gap-2">
+  const button = (
+    <>
       <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={handleChange} />
       <Button
         size="sm"
-        variant="surface"
+        variant={variant === 'compact' ? 'ghost' : 'surface'}
+        className={className}
         onClick={() => inputRef.current?.click()}
         disabled={isLoading || !activeDocumentId}
       >
-        {isLoading ? 'Uploading…' : '+ Add Layer'}
+        {isLoading ? 'Uploading…' : label}
       </Button>
-      <p className="text-xs text-muted">
-        Drop an image or use the button to add a new layer. {remoteEnabled ? 'Assets are uploaded securely to your Supabase storage.' : 'Assets stay local in this demo session and are cleared when the browser storage resets.'}
-      </p>
       {error && (
-        <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <div
+          className="mt-2 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger"
+          role="alert"
+        >
           {error}
         </div>
       )}
+    </>
+  );
+
+  if (variant === 'compact') {
+    return <div className="flex flex-col items-end gap-2 text-xs text-muted">{button}</div>;
+  }
+
+  return (
+    <div className="flex flex-col gap-2 text-xs text-muted">
+      {button}
+      <p>
+        Drop an image or use the button to add a new layer.{' '}
+        {remoteEnabled
+          ? 'Assets are uploaded securely to your Supabase storage.'
+          : 'Assets stay local in this demo session and are cleared when the browser storage resets.'}
+      </p>
+      {children}
     </div>
   );
 };

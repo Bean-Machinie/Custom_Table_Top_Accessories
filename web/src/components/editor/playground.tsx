@@ -12,6 +12,7 @@ import {
 } from 'react';
 
 import { createAssetStoreAdapter } from '../../adapters/asset-adapter';
+import { flattenLayersForRender, findLayerById } from '../../lib/layer-tree';
 import { transformToCss } from '../../lib/transform';
 import { createLayer, useEditorDispatch } from '../../stores/editor-store';
 import { useAuth } from '../../stores/auth-store';
@@ -19,8 +20,8 @@ import { useViewportDispatch, useViewportState } from '../../stores/viewport-sto
 
 interface EditorPlaygroundProps {
   document: FrameDocument;
-  selectedLayerId: string | null;
-  onSelectLayer: (layerId: string | null) => void;
+  selectedLayerIds: string[];
+  onSelectLayers: (layerIds: string[]) => void;
   showGrid: boolean;
 }
 
@@ -31,9 +32,7 @@ type PointerMode =
   | { type: 'resize'; layerId: string; startX: number; startY: number; transform: Transform; corner: 'se' | 'nw' }
   | { type: 'rotate'; layerId: string; startX: number; startY: number; transform: Transform };
 
-const sortLayers = (layers: Layer[]) => [...layers].sort((a, b) => a.order - b.order);
-
-export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, showGrid }: EditorPlaygroundProps) => {
+export const EditorPlayground = ({ document, selectedLayerIds, onSelectLayers, showGrid }: EditorPlaygroundProps) => {
   const viewport = useViewportState();
   const viewportDispatch = useViewportDispatch();
   const dispatch = useEditorDispatch();
@@ -54,18 +53,26 @@ export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, sho
       if (event.code === 'Space') {
         setSpacePressed(true);
       }
-      if (selectedLayerId && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      if (
+        selectedLayerIds.length > 0 &&
+        (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'ArrowLeft' || event.key === 'ArrowRight')
+      ) {
         event.preventDefault();
-        const layer = document.layers.find((entry) => entry.id === selectedLayerId);
-        if (!layer || layer.locked) return;
         const delta = event.shiftKey ? 10 : 1;
         const dx = event.key === 'ArrowRight' ? delta : event.key === 'ArrowLeft' ? -delta : 0;
         const dy = event.key === 'ArrowDown' ? delta : event.key === 'ArrowUp' ? -delta : 0;
-        dispatch({
-          type: 'update-transform',
-          documentId: document.id,
-          layerId: layer.id,
-          transform: { ...layer.transform, x: layer.transform.x + dx, y: layer.transform.y + dy }
+        const seen = new Set<string>();
+        selectedLayerIds.forEach((layerId) => {
+          if (seen.has(layerId)) return;
+          seen.add(layerId);
+          const layer = findLayerById(document.layers, layerId);
+          if (!layer || layer.locked) return;
+          dispatch({
+            type: 'update-transform',
+            documentId: document.id,
+            layerId: layer.id,
+            transform: { ...layer.transform, x: layer.transform.x + dx, y: layer.transform.y + dy }
+          });
         });
       }
     };
@@ -80,7 +87,7 @@ export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, sho
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [dispatch, document, selectedLayerId]);
+  }, [dispatch, document, selectedLayerIds]);
 
   useEffect(() => {
     liveRegionRef.current?.setAttribute('aria-live', 'polite');
@@ -144,7 +151,7 @@ export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, sho
       const layer = createLayer({
         name: file.name,
         type: 'image',
-        order: document.layers.length,
+        order: document.layers.filter((entry) => entry.type !== 'base').length,
         baseWidth: document.width / 2,
         baseHeight: document.height / 2,
         assetUrl: url
@@ -160,7 +167,8 @@ export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, sho
     event.preventDefault();
   };
 
-  const layers = sortLayers(document.layers);
+  const layers = useMemo(() => flattenLayersForRender(document.layers), [document.layers]);
+  const visibleLayers = layers.filter((layer) => layer.type !== 'group' && layer.visible);
 
   return (
     <div className="relative h-full flex-1 overflow-hidden" onWheel={handleWheel}>
@@ -180,19 +188,19 @@ export const EditorPlayground = ({ document, selectedLayerId, onSelectLayer, sho
           style={{
             transform: `translate(${viewport.offsetX}px, ${viewport.offsetY}px) scale(${viewport.zoom})`
           }}
-          onClick={() => onSelectLayer(null)}
+          onClick={() => onSelectLayers([])}
         >
           <div
             className="relative"
             style={{ width: document.width, height: document.height, backgroundColor: document.baseColor }}
           >
-            {layers.map((layer) => (
+            {visibleLayers.map((layer) => (
               <LayerNode
                 key={layer.id}
                 layer={layer}
                 documentId={document.id}
-                selected={layer.id === selectedLayerId}
-                onSelect={onSelectLayer}
+                selected={selectedLayerIds.includes(layer.id)}
+                onSelect={onSelectLayers}
                 viewportZoom={viewport.zoom}
                 dispatchTransform={(transform) =>
                   dispatch({
@@ -225,7 +233,7 @@ interface LayerNodeProps {
   documentId: string;
   selected: boolean;
   viewportZoom: number;
-  onSelect: (layerId: string | null) => void;
+  onSelect: (layerIds: string[]) => void;
   dispatchTransform: (transform: Transform) => void;
   setPointerMode: Dispatch<SetStateAction<PointerMode>>;
 }
@@ -243,7 +251,7 @@ const LayerNode = ({
   const handleMovePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (layer.locked) return;
     event.stopPropagation();
-    onSelect(layer.id);
+    onSelect([layer.id]);
     setPointerMode({
       type: 'move',
       layerId: layer.id,
@@ -303,7 +311,7 @@ const LayerNode = ({
   const handleResizePointerDown = (corner: 'se' | 'nw') => (event: React.PointerEvent<HTMLDivElement>) => {
     if (layer.locked) return;
     event.stopPropagation();
-    onSelect(layer.id);
+    onSelect([layer.id]);
     setPointerMode({
       type: 'resize',
       layerId: layer.id,
@@ -318,7 +326,7 @@ const LayerNode = ({
   const handleRotatePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (layer.locked) return;
     event.stopPropagation();
-    onSelect(layer.id);
+    onSelect([layer.id]);
     setPointerMode({
       type: 'rotate',
       layerId: layer.id,
@@ -328,6 +336,10 @@ const LayerNode = ({
     });
     event.currentTarget.setPointerCapture(event.pointerId);
   };
+
+  if (!layer.visible || layer.type === 'group') {
+    return null;
+  }
 
   const style = transformToCss(layer.transform);
 
