@@ -27,6 +27,12 @@ export const UserMenu = () => {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
+  // Compute derived values before any conditional returns
+  const displayName = profile?.displayName?.trim() || user?.user_metadata?.display_name || user?.email || 'Account';
+  const avatarUrl = profile?.avatarUrl || (user?.user_metadata?.avatar_url as string | undefined) || '';
+  const initials = useMemo(() => getInitials(displayName), [displayName]);
+  const email = profile?.email || user?.email || '';
+
   const handleProfile = useCallback(() => {
     navigate('/settings?panel=profile');
   }, [navigate]);
@@ -65,11 +71,6 @@ export const UserMenu = () => {
   if (!user) {
     return null;
   }
-
-  const displayName = profile?.displayName?.trim() || user.user_metadata?.display_name || user.email || 'Account';
-  const avatarUrl = profile?.avatarUrl || (user.user_metadata?.avatar_url as string | undefined) || '';
-  const initials = useMemo(() => getInitials(displayName), [displayName]);
-  const email = profile?.email || user.email || '';
 
   return (
     <div className="relative flex flex-col items-end gap-1">
