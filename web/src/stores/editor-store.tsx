@@ -31,6 +31,7 @@ type EditorAction =
   | { type: 'set-active-document'; documentId: string }
   | { type: 'update-layer'; documentId: string; layerId: string; layer: Partial<Layer> }
   | { type: 'update-transform'; documentId: string; layerId: string; transform: Transform }
+  | { type: 'update-layer-transforms'; documentId: string; updates: { layerId: string; transform: Transform }[] }
   | { type: 'add-layer'; documentId: string; layer: Layer }
   | { type: 'remove-layer'; documentId: string; layerId: string }
   | { type: 'remove-layers'; documentId: string; layerIds: string[] }
@@ -160,6 +161,17 @@ const editorReducer = (state: EditorState, action: EditorAction): EditorState =>
       const document = ensureDocument(state, action.documentId);
       const layers = document.layers.map((layer) =>
         layer.id === action.layerId ? { ...layer, transform: action.transform } : layer
+      );
+      return withDirty(state, document.id, {
+        ...document,
+        layers: ensureBaseCanvasInvariant(layers)
+      });
+    }
+    case 'update-layer-transforms': {
+      const document = ensureDocument(state, action.documentId);
+      const updates = new Map(action.updates.map((update) => [update.layerId, update.transform]));
+      const layers = document.layers.map((layer) =>
+        updates.has(layer.id) ? { ...layer, transform: updates.get(layer.id)! } : layer
       );
       return withDirty(state, document.id, {
         ...document,
