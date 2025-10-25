@@ -2,9 +2,10 @@ import type { Layer, Transform } from '@shared/index';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
-import { clientToDocument, ViewportGeometry } from '../lib/geometry';
+import { ViewportGeometry } from '../lib/geometry';
 import { getEventClientPoint, HandleType } from '../lib/pointer-math';
-import { getSelectionBBox } from '../lib/selection';
+import { toDocSpace, type DocPoint } from '../lib/document-space';
+import { computeMoveDelta, computeRotationDelta, getSelectionCenter } from '../lib/interaction-math';
 import { computeSnap, SnapGuide, SnapResult } from '../lib/snap-utils';
 import type { TransformChange } from '../lib/preview-surface';
 
@@ -27,11 +28,12 @@ interface UseTransformHandlesArgs {
 interface ActiveTransformState {
   handle: HandleType;
   pointerId: number;
-  startPoint: { x: number; y: number };
+  startPoint: DocPoint;
   initialTransforms: Record<string, Transform>;
-  selectionCenter: { x: number; y: number } | null;
+  selectionCenter: DocPoint | null;
   aspectLocked: boolean;
-  rotateStartAngle?: number;
+  rotateStartPointer?: DocPoint;
+  lastTransforms: Record<string, Transform>;
 }
 
 const cursorForHandle = (handle: HandleType): string => {
@@ -260,11 +262,8 @@ export const useTransformHandles = ({
         const state = stateRef.current;
         if (!state) return;
         const clientPoint = getEventClientPoint(event);
-        const pointer = clientToDocument(clientPoint, viewport, { documentRect });
-        const delta = {
-          x: pointer.x - state.startPoint.x,
-          y: pointer.y - state.startPoint.y
-        };
+        const pointer = toDocSpace(clientPoint.x, clientPoint.y, viewport, documentRect);
+        const delta = computeMoveDelta(state.startPoint, pointer);
         let nextTransforms: Record<string, Transform> = state.initialTransforms;
         let snap: SnapResult | null = null;
 
@@ -283,8 +282,11 @@ export const useTransformHandles = ({
           );
           nextTransforms = applyMove(state.initialTransforms, snap.delta);
         } else if (state.handle === 'rotate' && state.selectionCenter) {
-          const angle = Math.atan2(pointer.y - state.selectionCenter.y, pointer.x - state.selectionCenter.x);
-          let deltaAngle = ((angle - (state.rotateStartAngle ?? angle)) * 180) / Math.PI;
+          const startPointer = state.rotateStartPointer ?? pointer;
+          let deltaAngle = computeRotationDelta(state.selectionCenter, startPointer, pointer);
+          if (!Number.isFinite(deltaAngle)) {
+            deltaAngle = 0;
+          }
           if (!event.altKey) {
             const snapIncrement = 15;
             deltaAngle = Math.round(deltaAngle / snapIncrement) * snapIncrement;
@@ -300,6 +302,7 @@ export const useTransformHandles = ({
         ) {
           nextTransforms = applyStretch(state.initialTransforms, state.handle, delta, state.aspectLocked);
         }
+        state.lastTransforms = nextTransforms;
         onPreview(toChanges(nextTransforms), snap?.guides ?? []);
         setGuides(snap?.guides ?? []);
       });
@@ -308,49 +311,11 @@ export const useTransformHandles = ({
   );
 
   const endPointerTracking = useCallback(
-    (event: PointerEvent, commitChanges: boolean) => {
+    (_event: PointerEvent, commitChanges: boolean) => {
       if (!stateRef.current) return;
       const state = stateRef.current;
-      if (commitChanges && documentRect) {
-        const clientPoint = getEventClientPoint(event);
-        const pointer = clientToDocument(clientPoint, viewport, { documentRect });
-        const delta = {
-          x: pointer.x - state.startPoint.x,
-          y: pointer.y - state.startPoint.y
-        };
-        let nextTransforms: Record<string, Transform> = state.initialTransforms;
-        if (state.handle === 'move') {
-          const snap = computeSnap(
-            Object.values(state.initialTransforms),
-            delta,
-            {
-              gridSize: snapContext.gridSize,
-              threshold: snapContext.threshold,
-              viewportZoom: viewport.zoom,
-              otherLayers: snapContext.otherLayers.map((layer) => layer.transform),
-              documentWidth: snapContext.documentWidth,
-              documentHeight: snapContext.documentHeight
-            }
-          );
-          nextTransforms = applyMove(state.initialTransforms, snap.delta);
-        } else if (
-          state.handle === 'top' ||
-          state.handle === 'bottom' ||
-          state.handle === 'left' ||
-          state.handle === 'right' ||
-          state.handle.includes('top') ||
-          state.handle.includes('bottom')
-        ) {
-          nextTransforms = applyStretch(state.initialTransforms, state.handle, delta, state.aspectLocked);
-        } else if (state.handle === 'rotate' && state.selectionCenter) {
-          const angle = Math.atan2(pointer.y - state.selectionCenter.y, pointer.x - state.selectionCenter.x);
-          let deltaAngle = ((angle - (state.rotateStartAngle ?? angle)) * 180) / Math.PI;
-          if (!event.altKey) {
-            const snapIncrement = 15;
-            deltaAngle = Math.round(deltaAngle / snapIncrement) * snapIncrement;
-          }
-          nextTransforms = applyRotate(state.initialTransforms, deltaAngle);
-        }
+      if (commitChanges) {
+        const nextTransforms = state.lastTransforms ?? state.initialTransforms;
         commit(toChanges(nextTransforms));
       } else {
         reset();
@@ -361,7 +326,7 @@ export const useTransformHandles = ({
       setBodyCursor(null);
       setGuides([]);
     },
-    [commit, documentRect, reset, setBodyCursor, snapContext, viewport]
+    [commit, reset, setBodyCursor]
   );
 
   const beginPointerTracking = useCallback(
@@ -372,15 +337,12 @@ export const useTransformHandles = ({
       event.stopPropagation();
       const pointerId = event.pointerId;
       const clientPoint = getEventClientPoint(event.nativeEvent);
-      const pointer = clientToDocument(clientPoint, viewport, { documentRect });
+      const pointer = toDocSpace(clientPoint.x, clientPoint.y, viewport, documentRect);
       const initialTransforms: Record<string, Transform> = selection.reduce((acc, layer) => {
         acc[layer.id] = layer.transform;
         return acc;
       }, {} as Record<string, Transform>);
-      const selectionBox = getSelectionBBox(selection);
-      const selectionCenter = selectionBox
-        ? { x: selectionBox.x + selectionBox.width / 2, y: selectionBox.y + selectionBox.height / 2 }
-        : null;
+      const selectionCenter = getSelectionCenter(Object.values(initialTransforms));
       stateRef.current = {
         handle,
         pointerId,
@@ -390,10 +352,8 @@ export const useTransformHandles = ({
           ? !event.shiftKey // Corners maintain aspect unless Shift is held
           : false,
         selectionCenter,
-        rotateStartAngle:
-          handle === 'rotate' && selectionCenter
-            ? Math.atan2(pointer.y - selectionCenter.y, pointer.x - selectionCenter.x)
-            : undefined
+        rotateStartPointer: handle === 'rotate' ? pointer : undefined,
+        lastTransforms: initialTransforms
       };
       captureTargetRef.current = event.currentTarget;
       event.currentTarget.setPointerCapture(pointerId);
@@ -402,6 +362,12 @@ export const useTransformHandles = ({
 
       const handleMove = (nativeEvent: PointerEvent) => {
         if (nativeEvent.pointerId !== pointerId) return;
+        if (
+          !(captureTargetRef.current instanceof Element) ||
+          !captureTargetRef.current.hasPointerCapture(pointerId)
+        ) {
+          return;
+        }
         schedulePreview(nativeEvent);
       };
       const handleUp = (nativeEvent: PointerEvent) => {
