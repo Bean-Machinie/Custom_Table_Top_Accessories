@@ -5,15 +5,17 @@ import { memo, useMemo, type CSSProperties } from 'react';
 import { useTransformHandles } from '../../hooks/use-transform-handles';
 import { scaleHandleSizeForZoom } from '../../lib/pointer-math';
 import { SnapGuide } from '../../lib/snap-utils';
+import type { TransformChange } from '../../lib/preview-surface';
+import type { ViewportGeometry } from '../../lib/geometry';
 import { expandBoundingBoxes, getRotatedBoundingBox } from '../../lib/transform-geometry';
 
 interface SelectionOverlayProps {
   selection: Layer[];
   previewTransforms: Record<string, Transform>;
-  viewportZoom: number;
+  viewport: ViewportGeometry;
   documentRect: DOMRect | null;
-  onPreview: (transforms: Record<string, Transform>, guides: SnapGuide[]) => void;
-  onCommit: (transforms: Record<string, Transform>) => void;
+  onPreview: (changes: TransformChange[], guides: SnapGuide[]) => void;
+  onCommit: (changes: TransformChange[]) => void;
   onCancel: () => void;
   snapContext: {
     gridSize: number;
@@ -41,7 +43,7 @@ export const SelectionOverlay = memo(
   ({
     selection,
     previewTransforms,
-    viewportZoom,
+    viewport,
     documentRect,
     onPreview,
     onCommit,
@@ -61,12 +63,12 @@ export const SelectionOverlay = memo(
       return expandBoundingBoxes(boxes);
     }, [selectionWithPreview]);
 
-    const handleSize = scaleHandleSizeForZoom(12, viewportZoom);
+    const handleSize = scaleHandleSizeForZoom(12, viewport.zoom);
     const rotationHandleOffset = handleSize * 4;
 
     const { beginPointerTracking, guides, activeHandle } = useTransformHandles({
       selection: selectionWithPreview,
-      viewport: { zoom: viewportZoom },
+      viewport,
       documentRect,
       onPreview,
       onCommit,

@@ -29,6 +29,13 @@ import { SelectionOverlay } from './selection-overlay';
 import { hitTestLayers } from '../../lib/hit-test';
 import { clientToDocumentPoint, getEventClientPoint } from '../../lib/pointer-math';
 import type { SnapGuide } from '../../lib/snap-utils';
+import {
+  clearPreview,
+  commitPreviewChanges,
+  computeEffectiveTransform,
+  mergePreviewTransforms,
+  type TransformChange
+} from '../../lib/preview-surface';
 
 export interface EditorPlaygroundRef {
   containerRef: React.RefObject<HTMLDivElement>;
@@ -251,26 +258,39 @@ export const EditorPlayground = ({
     }
   };
 
+  const persistedTransformMap = useMemo(() => {
+    const map = new Map<string, Transform>();
+    document.layers.forEach((layer) => {
+      map.set(layer.id, layer.transform);
+    });
+    return map;
+  }, [document.layers]);
+
   const handleTransformPreview = useCallback(
-    (transforms: Record<string, Transform>, _guides?: SnapGuide[]) => {
-      setPreviewTransforms(transforms);
+    (changes: TransformChange[], _guides?: SnapGuide[]) => {
+      if (changes.length === 0) return;
+      setPreviewTransforms((current) => mergePreviewTransforms(current, persistedTransformMap, changes));
     },
-    []
+    [persistedTransformMap]
   );
 
   const handleTransformCommit = useCallback(
-    (transforms: Record<string, Transform>) => {
-      const updates = Object.entries(transforms).map(([layerId, transform]) => ({ layerId, transform }));
+    (changes: TransformChange[]) => {
+      if (changes.length === 0) {
+        setPreviewTransforms(clearPreview());
+        return;
+      }
+      const updates = commitPreviewChanges(persistedTransformMap, changes, previewTransforms);
       if (updates.length > 0) {
         dispatch({ type: 'update-layer-transforms', documentId: document.id, updates });
       }
-      setPreviewTransforms({});
+      setPreviewTransforms(clearPreview());
     },
-    [dispatch, document.id]
+    [dispatch, document.id, persistedTransformMap, previewTransforms]
   );
 
   const handleTransformCancel = useCallback(() => {
-    setPreviewTransforms({});
+    setPreviewTransforms(clearPreview());
   }, []);
 
   const handleCanvasPointerDown = (
@@ -489,9 +509,9 @@ export const EditorPlayground = ({
     () =>
       visibleLayers.map((layer) => ({
         ...layer,
-        transform: previewTransforms[layer.id] ?? layer.transform
+        transform: computeEffectiveTransform(layer.id, persistedTransformMap, previewTransforms)
       })),
-    [previewTransforms, visibleLayers]
+    [persistedTransformMap, previewTransforms, visibleLayers]
   );
   const selectedLayers = useMemo(
     () => interactiveLayers.filter((layer) => selectedLayerIds.includes(layer.id)),
@@ -559,7 +579,7 @@ export const EditorPlayground = ({
               <SelectionOverlay
                 selection={selectedLayers}
                 previewTransforms={previewTransforms}
-                viewportZoom={viewport.zoom}
+                viewport={viewport}
                 documentRect={documentRect}
                 onPreview={handleTransformPreview}
                 onCommit={handleTransformCommit}
