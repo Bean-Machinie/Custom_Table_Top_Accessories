@@ -33,6 +33,28 @@ interface ActiveTransformState {
   altKey?: boolean;
 }
 
+const cursorForHandle = (handle: HandleType): string => {
+  switch (handle) {
+    case 'move':
+    case 'rotate':
+      return 'grabbing';
+    case 'top':
+    case 'bottom':
+      return 'ns-resize';
+    case 'left':
+    case 'right':
+      return 'ew-resize';
+    case 'top-left':
+    case 'bottom-right':
+      return 'nwse-resize';
+    case 'top-right':
+    case 'bottom-left':
+      return 'nesw-resize';
+    default:
+      return 'default';
+  }
+};
+
 const applyMove = (
   initial: Record<string, Transform>,
   delta: { x: number; y: number }
@@ -117,19 +139,56 @@ export const useTransformHandles = ({
 }: UseTransformHandlesArgs) => {
   const stateRef = useRef<ActiveTransformState | null>(null);
   const rafRef = useRef<number | null>(null);
+  const captureTargetRef = useRef<EventTarget | null>(null);
+  const previousBodyCursorRef = useRef<string | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
+  const [activeHandle, setActiveHandle] = useState<HandleType | null>(null);
+
+  const setBodyCursor = useCallback((cursor: string | null) => {
+    if (typeof document === 'undefined') return;
+    if (cursor) {
+      if (previousBodyCursorRef.current === null) {
+        previousBodyCursorRef.current = document.body.style.cursor || '';
+      }
+      document.body.style.cursor = cursor;
+    } else {
+      if (previousBodyCursorRef.current !== null) {
+        document.body.style.cursor = previousBodyCursorRef.current;
+        previousBodyCursorRef.current = null;
+      } else {
+        document.body.style.removeProperty('cursor');
+      }
+    }
+  }, []);
 
   const reset = useCallback(() => {
+    if (stateRef.current && captureTargetRef.current instanceof Element) {
+      try {
+        captureTargetRef.current.releasePointerCapture(stateRef.current.pointerId);
+      } catch (error) {
+        // Ignore if capture was already released
+      }
+    }
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
     stateRef.current = null;
+    captureTargetRef.current = null;
+    setActiveHandle(null);
     setGuides([]);
+    setBodyCursor(null);
     onCancel();
-  }, [onCancel]);
+  }, [onCancel, setBodyCursor]);
 
   useEffect(() => () => reset(), [reset]);
+
+  useEffect(
+    () => () => {
+      setBodyCursor(null);
+    },
+    [setBodyCursor]
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -256,14 +315,18 @@ export const useTransformHandles = ({
         reset();
       }
       stateRef.current = null;
+      captureTargetRef.current = null;
+      setActiveHandle(null);
+      setBodyCursor(null);
       setGuides([]);
     },
-    [commit, documentRect, reset, snapContext, viewport]
+    [commit, documentRect, reset, setBodyCursor, snapContext, viewport]
   );
 
   const beginPointerTracking = useCallback(
     (handle: HandleType, event: ReactPointerEvent) => {
       if (!documentRect || selection.length === 0) return;
+      if (event.button !== 0) return;
       event.preventDefault();
       event.stopPropagation();
       const pointerId = event.pointerId;
@@ -289,7 +352,10 @@ export const useTransformHandles = ({
             ? Math.atan2(pointer.y - boundingBox.center.y, pointer.x - boundingBox.center.x)
             : undefined
       };
+      captureTargetRef.current = event.currentTarget;
       event.currentTarget.setPointerCapture(pointerId);
+      setActiveHandle(handle);
+      setBodyCursor(cursorForHandle(handle));
 
       const handleMove = (nativeEvent: PointerEvent) => {
         if (nativeEvent.pointerId !== pointerId) return;
@@ -297,7 +363,14 @@ export const useTransformHandles = ({
       };
       const handleUp = (nativeEvent: PointerEvent) => {
         if (nativeEvent.pointerId !== pointerId) return;
-        event.currentTarget.releasePointerCapture(pointerId);
+        if (captureTargetRef.current instanceof Element) {
+          try {
+            captureTargetRef.current.releasePointerCapture(pointerId);
+          } catch (error) {
+            // Ignore if capture was already released
+          }
+        }
+        captureTargetRef.current = null;
         window.removeEventListener('pointermove', handleMove);
         window.removeEventListener('pointerup', handleUp);
         window.removeEventListener('pointercancel', handleCancel);
@@ -305,7 +378,14 @@ export const useTransformHandles = ({
       };
       const handleCancel = (nativeEvent: PointerEvent) => {
         if (nativeEvent.pointerId !== pointerId) return;
-        event.currentTarget.releasePointerCapture(pointerId);
+        if (captureTargetRef.current instanceof Element) {
+          try {
+            captureTargetRef.current.releasePointerCapture(pointerId);
+          } catch (error) {
+            // Ignore if capture was already released
+          }
+        }
+        captureTargetRef.current = null;
         window.removeEventListener('pointermove', handleMove);
         window.removeEventListener('pointerup', handleUp);
         window.removeEventListener('pointercancel', handleCancel);
@@ -316,13 +396,14 @@ export const useTransformHandles = ({
       window.addEventListener('pointerup', handleUp, { passive: true });
       window.addEventListener('pointercancel', handleCancel, { passive: true });
     },
-    [documentRect, endPointerTracking, schedulePreview, selection, viewport]
+    [documentRect, endPointerTracking, schedulePreview, selection, setBodyCursor, viewport]
   );
 
   return {
     beginPointerTracking,
     guides,
-    isTransforming: stateRef.current !== null
+    isTransforming: stateRef.current !== null,
+    activeHandle
   };
 };
 

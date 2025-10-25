@@ -514,7 +514,7 @@ export const EditorPlayground = ({
       <div
         ref={containerRef}
         className={`relative h-full w-full overflow-hidden bg-background ${
-          pointerMode.type === 'pan' ? 'cursor-grabbing' : spacePressed ? 'cursor-grab' : 'cursor-crosshair'
+          pointerMode.type === 'pan' ? 'cursor-grabbing' : spacePressed ? 'cursor-grab' : 'cursor-default'
         }`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -600,7 +600,12 @@ const LayerNode = ({ layer, selected }: LayerNodeProps) => {
   return (
     <div className={`absolute ${selected ? 'z-10' : ''}`} style={style}>
       {layer.type === 'image' && layer.assetUrl ? (
-        <img src={layer.assetUrl} alt={layer.name} className="h-full w-full rounded-md object-contain" draggable={false} />
+        <img
+          src={layer.assetUrl}
+          alt={layer.name}
+          className="h-full w-full rounded-md object-fill"
+          draggable={false}
+        />
       ) : (
         <div className={`h-full w-full rounded-md border ${selected ? 'border-accent/80' : 'border-border/40'}`} />
       )}

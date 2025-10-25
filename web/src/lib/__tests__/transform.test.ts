@@ -14,7 +14,10 @@ describe('transform utilities', () => {
     const transform = defaultTransform(100, 200);
     const css = transformToCss(transform);
     expect(css.transform).toContain('translate(0px, 0px)');
+    expect(css.transform).toContain('translate(50px, 100px)');
+    expect(css.transform).toContain('rotate(0deg)');
     expect(css.transform).toContain('scale(1, 1)');
+    expect(css.transform).toContain('translate(-50px, -100px)');
   });
 
   it('applies deltas immutably', () => {
