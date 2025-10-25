@@ -2,16 +2,18 @@ import type { Layer, Transform } from '@shared/index';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
-import { clientToDocumentPoint, getEventClientPoint, HandleType } from '../lib/pointer-math';
+import { clientToDocument, ViewportGeometry } from '../lib/geometry';
+import { getEventClientPoint, HandleType } from '../lib/pointer-math';
+import { getSelectionBBox } from '../lib/selection';
 import { computeSnap, SnapGuide, SnapResult } from '../lib/snap-utils';
-import { expandBoundingBoxes, getRotatedBoundingBox } from '../lib/transform-geometry';
+import type { TransformChange } from '../lib/preview-surface';
 
 interface UseTransformHandlesArgs {
   selection: Layer[];
-  viewport: { zoom: number };
+  viewport: ViewportGeometry;
   documentRect: DOMRect | null;
-  onPreview: (transforms: Record<string, Transform>, guides: SnapGuide[]) => void;
-  onCommit: (transforms: Record<string, Transform>) => void;
+  onPreview: (changes: TransformChange[], guides: SnapGuide[]) => void;
+  onCommit: (changes: TransformChange[]) => void;
   onCancel: () => void;
   snapContext: {
     gridSize: number;
@@ -27,10 +29,9 @@ interface ActiveTransformState {
   pointerId: number;
   startPoint: { x: number; y: number };
   initialTransforms: Record<string, Transform>;
-  boundingBox: ReturnType<typeof getRotatedBoundingBox> | null;
+  selectionCenter: { x: number; y: number } | null;
   aspectLocked: boolean;
-  initialAngle?: number;
-  altKey?: boolean;
+  rotateStartAngle?: number;
 }
 
 const cursorForHandle = (handle: HandleType): string => {
@@ -70,47 +71,86 @@ const applyMove = (
   return result;
 };
 
-const applyScale = (
+const clampDimension = (value: number, min: number) => Math.max(min, value);
+
+const applyStretch = (
   initial: Record<string, Transform>,
   handle: HandleType,
-  delta: { x: number; y: number },
-  boundingBox: ReturnType<typeof getRotatedBoundingBox> | null,
+  worldDelta: { x: number; y: number },
   aspectLocked: boolean
 ): Record<string, Transform> => {
-  if (!boundingBox) return initial;
   const result: Record<string, Transform> = {};
-  const width = Math.max(1, boundingBox.width);
-  const height = Math.max(1, boundingBox.height);
-  const scaleXDelta = handle.includes('left') ? -delta.x : handle.includes('right') ? delta.x : 0;
-  const scaleYDelta = handle.includes('top') ? -delta.y : handle.includes('bottom') ? delta.y : 0;
-  const nextWidth = Math.max(8, width + scaleXDelta);
-  const nextHeight = Math.max(8, height + scaleYDelta);
-  const ratioX = nextWidth / width;
-  const ratioY = nextHeight / height;
-  const ratio = aspectLocked ? Math.max(ratioX, ratioY) : undefined;
-  const finalRatioX = aspectLocked ? ratio! : ratioX;
-  const finalRatioY = aspectLocked ? ratio! : ratioY;
-  const anchorX = handle.includes('left') ? boundingBox.maxX : handle.includes('right') ? boundingBox.minX : boundingBox.center.x;
-  const anchorY = handle.includes('top') ? boundingBox.maxY : handle.includes('bottom') ? boundingBox.minY : boundingBox.center.y;
-
   Object.entries(initial).forEach(([layerId, transform]) => {
-    const centerX = transform.x + transform.width / 2;
-    const centerY = transform.y + transform.height / 2;
-    const distanceX = centerX - anchorX;
-    const distanceY = centerY - anchorY;
-    const scaledCenterX = anchorX + distanceX * finalRatioX;
-    const scaledCenterY = anchorY + distanceY * finalRatioY;
-    const widthScaled = Math.max(8, transform.width * finalRatioX);
-    const heightScaled = Math.max(8, transform.height * finalRatioY);
+    const angle = (transform.rotation * Math.PI) / 180;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const localDx = worldDelta.x * cos + worldDelta.y * sin;
+    const localDy = -worldDelta.x * sin + worldDelta.y * cos;
+
+    const minWidth = 8;
+    const minHeight = 8;
+
+    const startWidth = transform.width;
+    const startHeight = transform.height;
+    let deltaWidthLocal = 0;
+    let deltaHeightLocal = 0;
+
+    if (handle.includes('right')) {
+      deltaWidthLocal = localDx;
+    } else if (handle.includes('left')) {
+      deltaWidthLocal = -localDx;
+    }
+
+    if (handle.includes('bottom')) {
+      deltaHeightLocal = localDy;
+    } else if (handle.includes('top')) {
+      deltaHeightLocal = -localDy;
+    }
+
+    if (aspectLocked && handle.includes('-')) {
+      const widthScale = startWidth === 0 ? 0 : deltaWidthLocal / startWidth;
+      const heightScale = startHeight === 0 ? 0 : deltaHeightLocal / startHeight;
+      let dominant = Math.abs(widthScale) > Math.abs(heightScale) ? widthScale : heightScale;
+      if (!Number.isFinite(dominant)) dominant = 0;
+      deltaWidthLocal = dominant * startWidth;
+      deltaHeightLocal = dominant * startHeight;
+    }
+
+    const nextWidth = clampDimension(startWidth + deltaWidthLocal, minWidth);
+    const nextHeight = clampDimension(startHeight + deltaHeightLocal, minHeight);
+
+    const widthChange = nextWidth - startWidth;
+    const heightChange = nextHeight - startHeight;
+
+    let shiftLocalX = 0;
+    let shiftLocalY = 0;
+
+    if (handle.includes('right')) {
+      shiftLocalX += widthChange / 2;
+    } else if (handle.includes('left')) {
+      shiftLocalX -= widthChange / 2;
+    }
+
+    if (handle.includes('bottom')) {
+      shiftLocalY += heightChange / 2;
+    } else if (handle.includes('top')) {
+      shiftLocalY -= heightChange / 2;
+    }
+
+    const shiftWorldX = shiftLocalX * cos - shiftLocalY * sin;
+    const shiftWorldY = shiftLocalX * sin + shiftLocalY * cos;
+
+    const centerX = transform.x + transform.width / 2 + shiftWorldX;
+    const centerY = transform.y + transform.height / 2 + shiftWorldY;
+
     result[layerId] = {
       ...transform,
-      width: widthScaled,
-      height: heightScaled,
-      x: scaledCenterX - widthScaled / 2,
-      y: scaledCenterY - heightScaled / 2
+      width: nextWidth,
+      height: nextHeight,
+      x: centerX - nextWidth / 2,
+      y: centerY - nextHeight / 2
     };
   });
-
   return result;
 };
 
@@ -127,6 +167,9 @@ const applyRotate = (
   });
   return result;
 };
+
+const toChanges = (transforms: Record<string, Transform>): TransformChange[] =>
+  Object.entries(transforms).map(([id, transform]) => ({ id, ...transform }));
 
 export const useTransformHandles = ({
   selection,
@@ -202,8 +245,8 @@ export const useTransformHandles = ({
   }, [reset]);
 
   const commit = useCallback(
-    (transforms: Record<string, Transform>) => {
-      onCommit(transforms);
+    (changes: TransformChange[]) => {
+      onCommit(changes);
       setGuides([]);
     },
     [onCommit]
@@ -217,7 +260,7 @@ export const useTransformHandles = ({
         const state = stateRef.current;
         if (!state) return;
         const clientPoint = getEventClientPoint(event);
-        const pointer = clientToDocumentPoint(clientPoint, { documentRect, viewport });
+        const pointer = clientToDocument(clientPoint, viewport, { documentRect });
         const delta = {
           x: pointer.x - state.startPoint.x,
           y: pointer.y - state.startPoint.y
@@ -239,6 +282,14 @@ export const useTransformHandles = ({
             }
           );
           nextTransforms = applyMove(state.initialTransforms, snap.delta);
+        } else if (state.handle === 'rotate' && state.selectionCenter) {
+          const angle = Math.atan2(pointer.y - state.selectionCenter.y, pointer.x - state.selectionCenter.x);
+          let deltaAngle = ((angle - (state.rotateStartAngle ?? angle)) * 180) / Math.PI;
+          if (!event.altKey) {
+            const snapIncrement = 15;
+            deltaAngle = Math.round(deltaAngle / snapIncrement) * snapIncrement;
+          }
+          nextTransforms = applyRotate(state.initialTransforms, deltaAngle);
         } else if (
           state.handle === 'top' ||
           state.handle === 'bottom' ||
@@ -247,18 +298,9 @@ export const useTransformHandles = ({
           state.handle.includes('top') ||
           state.handle.includes('bottom')
         ) {
-          nextTransforms = applyScale(state.initialTransforms, state.handle, delta, state.boundingBox, state.aspectLocked);
-        } else if (state.handle === 'rotate' && state.boundingBox) {
-          const center = state.boundingBox.center;
-          const angle = Math.atan2(pointer.y - center.y, pointer.x - center.x);
-          const deltaAngle = ((angle - (state.initialAngle ?? angle)) * 180) / Math.PI;
-          const snapIncrement = 15;
-          const snapped = event.altKey
-            ? Math.round(deltaAngle / snapIncrement) * snapIncrement
-            : deltaAngle;
-          nextTransforms = applyRotate(state.initialTransforms, snapped);
+          nextTransforms = applyStretch(state.initialTransforms, state.handle, delta, state.aspectLocked);
         }
-        onPreview(nextTransforms, snap?.guides ?? []);
+        onPreview(toChanges(nextTransforms), snap?.guides ?? []);
         setGuides(snap?.guides ?? []);
       });
     },
@@ -271,7 +313,7 @@ export const useTransformHandles = ({
       const state = stateRef.current;
       if (commitChanges && documentRect) {
         const clientPoint = getEventClientPoint(event);
-        const pointer = clientToDocumentPoint(clientPoint, { documentRect, viewport });
+        const pointer = clientToDocument(clientPoint, viewport, { documentRect });
         const delta = {
           x: pointer.x - state.startPoint.x,
           y: pointer.y - state.startPoint.y
@@ -299,18 +341,17 @@ export const useTransformHandles = ({
           state.handle.includes('top') ||
           state.handle.includes('bottom')
         ) {
-          nextTransforms = applyScale(state.initialTransforms, state.handle, delta, state.boundingBox, state.aspectLocked);
-        } else if (state.handle === 'rotate' && state.boundingBox) {
-          const center = state.boundingBox.center;
-          const angle = Math.atan2(pointer.y - center.y, pointer.x - center.x);
-          const deltaAngle = ((angle - (state.initialAngle ?? angle)) * 180) / Math.PI;
-          const snapIncrement = 15;
-          const snapped = event.altKey
-            ? Math.round(deltaAngle / snapIncrement) * snapIncrement
-            : deltaAngle;
-          nextTransforms = applyRotate(state.initialTransforms, snapped);
+          nextTransforms = applyStretch(state.initialTransforms, state.handle, delta, state.aspectLocked);
+        } else if (state.handle === 'rotate' && state.selectionCenter) {
+          const angle = Math.atan2(pointer.y - state.selectionCenter.y, pointer.x - state.selectionCenter.x);
+          let deltaAngle = ((angle - (state.rotateStartAngle ?? angle)) * 180) / Math.PI;
+          if (!event.altKey) {
+            const snapIncrement = 15;
+            deltaAngle = Math.round(deltaAngle / snapIncrement) * snapIncrement;
+          }
+          nextTransforms = applyRotate(state.initialTransforms, deltaAngle);
         }
-        commit(nextTransforms);
+        commit(toChanges(nextTransforms));
       } else {
         reset();
       }
@@ -331,25 +372,27 @@ export const useTransformHandles = ({
       event.stopPropagation();
       const pointerId = event.pointerId;
       const clientPoint = getEventClientPoint(event.nativeEvent);
-      const pointer = clientToDocumentPoint(clientPoint, { documentRect, viewport });
+      const pointer = clientToDocument(clientPoint, viewport, { documentRect });
       const initialTransforms: Record<string, Transform> = selection.reduce((acc, layer) => {
         acc[layer.id] = layer.transform;
         return acc;
       }, {} as Record<string, Transform>);
-      const selectionBoxes = selection.map((layer) => getRotatedBoundingBox(layer.transform));
-      const boundingBox = expandBoundingBoxes(selectionBoxes);
+      const selectionBox = getSelectionBBox(selection);
+      const selectionCenter = selectionBox
+        ? { x: selectionBox.x + selectionBox.width / 2, y: selectionBox.y + selectionBox.height / 2 }
+        : null;
       stateRef.current = {
         handle,
         pointerId,
         startPoint: pointer,
         initialTransforms,
-        boundingBox,
         aspectLocked: handle.includes('-')
           ? !event.shiftKey // Corners maintain aspect unless Shift is held
           : false,
-        initialAngle:
-          handle === 'rotate' && boundingBox
-            ? Math.atan2(pointer.y - boundingBox.center.y, pointer.x - boundingBox.center.x)
+        selectionCenter,
+        rotateStartAngle:
+          handle === 'rotate' && selectionCenter
+            ? Math.atan2(pointer.y - selectionCenter.y, pointer.x - selectionCenter.x)
             : undefined
       };
       captureTargetRef.current = event.currentTarget;
