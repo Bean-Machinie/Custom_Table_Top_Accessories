@@ -1,11 +1,14 @@
 import type { FrameDocument, Layer, Transform } from '@shared/index';
 import {
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type Dispatch,
   type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type SetStateAction,
   type WheelEvent as ReactWheelEvent
@@ -22,6 +25,10 @@ import { useViewportDispatch, useViewportState } from '../../stores/viewport-sto
 import { useInertialPan } from '../../hooks/use-inertial-pan';
 import { PlaygroundHud } from './playground-hud';
 import { GridRenderer } from './grid-renderer';
+import { SelectionOverlay } from './selection-overlay';
+import { hitTestLayers } from '../../lib/hit-test';
+import { clientToDocumentPoint, getEventClientPoint } from '../../lib/pointer-math';
+import type { SnapGuide } from '../../lib/snap-utils';
 
 export interface EditorPlaygroundRef {
   containerRef: React.RefObject<HTMLDivElement>;
@@ -30,18 +37,13 @@ export interface EditorPlaygroundRef {
 interface EditorPlaygroundProps {
   document: FrameDocument;
   selectedLayerIds: string[];
-  onSelectLayers: (layerIds: string[]) => void;
+  onSelectLayers: Dispatch<SetStateAction<string[]>>;
   showGrid: boolean;
   onToggleGrid?: () => void;
   playgroundContainerRef?: React.RefObject<HTMLDivElement>;
 }
 
-type PointerMode =
-  | { type: 'idle' }
-  | { type: 'pan'; lastX: number; lastY: number }
-  | { type: 'move'; layerId: string; startX: number; startY: number; transform: Transform }
-  | { type: 'resize'; layerId: string; startX: number; startY: number; transform: Transform; corner: 'se' | 'nw' }
-  | { type: 'rotate'; layerId: string; startX: number; startY: number; transform: Transform };
+type PointerMode = { type: 'idle' } | { type: 'pan'; lastX: number; lastY: number };
 
 export const EditorPlayground = ({
   document,
@@ -66,6 +68,10 @@ export const EditorPlayground = ({
   const [spacePressed, setSpacePressed] = useState(false);
   const liveRegionRef = useRef<HTMLDivElement | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const documentRef = useRef<HTMLDivElement | null>(null);
+  const [documentRect, setDocumentRect] = useState<DOMRect | null>(null);
+  const [previewTransforms, setPreviewTransforms] = useState<Record<string, Transform>>({});
+  const selectionAnchorRef = useRef<string | null>(null);
 
   // Inertial pan hook
   const { trackVelocity, startInertia, cancelInertia, resetVelocity } = useInertialPan((dx, dy) => {
@@ -87,6 +93,31 @@ export const EditorPlayground = ({
       viewport: constrained
     });
   });
+
+  useLayoutEffect(() => {
+    if (documentRef.current) {
+      setDocumentRect(documentRef.current.getBoundingClientRect());
+    }
+  }, [document.height, document.width, viewport.offsetX, viewport.offsetY, viewport.zoom]);
+
+  useEffect(() => {
+    const updateRect = () => {
+      if (documentRef.current) {
+        setDocumentRect(documentRef.current.getBoundingClientRect());
+      }
+    };
+    updateRect();
+    window.addEventListener('resize', updateRect);
+    return () => window.removeEventListener('resize', updateRect);
+  }, []);
+
+  useEffect(() => {
+    if (selectedLayerIds.length > 0) {
+      selectionAnchorRef.current = selectedLayerIds[selectedLayerIds.length - 1];
+    } else {
+      selectionAnchorRef.current = null;
+    }
+  }, [selectedLayerIds]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -168,18 +199,20 @@ export const EditorPlayground = ({
         const dx = event.key === 'ArrowRight' ? delta : event.key === 'ArrowLeft' ? -delta : 0;
         const dy = event.key === 'ArrowDown' ? delta : event.key === 'ArrowUp' ? -delta : 0;
         const seen = new Set<string>();
+        const updates: { layerId: string; transform: Transform }[] = [];
         selectedLayerIds.forEach((layerId) => {
           if (seen.has(layerId)) return;
           seen.add(layerId);
           const layer = findLayerById(document.layers, layerId);
           if (!layer || layer.locked) return;
-          dispatch({
-            type: 'update-transform',
-            documentId: document.id,
+          updates.push({
             layerId: layer.id,
             transform: { ...layer.transform, x: layer.transform.x + dx, y: layer.transform.y + dy }
           });
         });
+        if (updates.length > 0) {
+          dispatch({ type: 'update-layer-transforms', documentId: document.id, updates });
+        }
       }
     };
     const handleKeyUp = (event: KeyboardEvent) => {
@@ -216,6 +249,78 @@ export const EditorPlayground = ({
       (event.target as HTMLElement).setPointerCapture(event.pointerId);
       return;
     }
+  };
+
+  const handleTransformPreview = useCallback(
+    (transforms: Record<string, Transform>, _guides?: SnapGuide[]) => {
+      setPreviewTransforms(transforms);
+    },
+    []
+  );
+
+  const handleTransformCommit = useCallback(
+    (transforms: Record<string, Transform>) => {
+      const updates = Object.entries(transforms).map(([layerId, transform]) => ({ layerId, transform }));
+      if (updates.length > 0) {
+        dispatch({ type: 'update-layer-transforms', documentId: document.id, updates });
+      }
+      setPreviewTransforms({});
+    },
+    [dispatch, document.id]
+  );
+
+  const handleTransformCancel = useCallback(() => {
+    setPreviewTransforms({});
+  }, []);
+
+  const handleCanvasPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement> | ReactMouseEvent<HTMLDivElement>
+  ) => {
+    if (spacePressed || event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (!documentRect) {
+      if (documentRef.current) {
+        setDocumentRect(documentRef.current.getBoundingClientRect());
+      }
+    }
+    const rect = documentRect ?? documentRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const docPoint = clientToDocumentPoint(getEventClientPoint(event.nativeEvent), {
+      documentRect: rect,
+      viewport
+    });
+    const renderLayers = visibleLayers
+      .map((layer) => ({
+        ...layer,
+        transform: previewTransforms[layer.id] ?? layer.transform
+      }))
+      .sort((a, b) => a.order - b.order);
+    const hit = hitTestLayers(renderLayers, docPoint);
+    if (hit) {
+      if (event.metaKey || event.ctrlKey) {
+        onSelectLayers((current) =>
+          current.includes(hit.id) ? current.filter((id) => id !== hit.id) : [...current, hit.id]
+        );
+        return;
+      }
+      if (event.shiftKey && selectionAnchorRef.current) {
+        const order = renderLayers.map((layer) => layer.id);
+        const anchorIndex = order.indexOf(selectionAnchorRef.current);
+        const targetIndex = order.indexOf(hit.id);
+        if (anchorIndex !== -1 && targetIndex !== -1) {
+          const [from, to] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+          const range = order.slice(from, to + 1);
+          onSelectLayers(() => range);
+          return;
+        }
+      }
+      onSelectLayers(() => [hit.id]);
+      return;
+    }
+    onSelectLayers(() => []);
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -376,7 +481,32 @@ export const EditorPlayground = ({
   }, [document.width, document.height, viewportDispatch]);
 
   const layers = useMemo(() => flattenLayersForRender(document.layers), [document.layers]);
-  const visibleLayers = layers.filter((layer) => layer.type !== 'group' && layer.visible);
+  const visibleLayers = useMemo(
+    () => layers.filter((layer) => layer.type !== 'group' && layer.visible),
+    [layers]
+  );
+  const interactiveLayers = useMemo(
+    () =>
+      visibleLayers.map((layer) => ({
+        ...layer,
+        transform: previewTransforms[layer.id] ?? layer.transform
+      })),
+    [previewTransforms, visibleLayers]
+  );
+  const selectedLayers = useMemo(
+    () => interactiveLayers.filter((layer) => selectedLayerIds.includes(layer.id)),
+    [interactiveLayers, selectedLayerIds]
+  );
+  const snapContext = useMemo(
+    () => ({
+      gridSize: 32,
+      threshold: 8,
+      documentWidth: document.width,
+      documentHeight: document.height,
+      otherLayers: interactiveLayers.filter((layer) => !selectedLayerIds.includes(layer.id))
+    }),
+    [document.height, document.width, interactiveLayers, selectedLayerIds]
+  );
 
   return (
     <div className="relative h-full flex-1 overflow-hidden">
@@ -413,31 +543,30 @@ export const EditorPlayground = ({
           style={{
             transform: `translate(${viewport.offsetX}px, ${viewport.offsetY}px) scale(${viewport.zoom})`
           }}
-          onClick={() => onSelectLayers([])}
         >
           <div
+            ref={documentRef}
+            data-testid="editor-document"
             className="relative shadow-lg"
             style={{ width: document.width, height: document.height, backgroundColor: document.baseColor }}
+            onPointerDown={handleCanvasPointerDown}
+            onMouseDown={handleCanvasPointerDown}
           >
-            {visibleLayers.map((layer) => (
-              <LayerNode
-                key={layer.id}
-                layer={layer}
-                documentId={document.id}
-                selected={selectedLayerIds.includes(layer.id)}
-                onSelect={onSelectLayers}
-                viewportZoom={viewport.zoom}
-                dispatchTransform={(transform) =>
-                  dispatch({
-                    type: 'update-transform',
-                    documentId: document.id,
-                    layerId: layer.id,
-                    transform
-                  })
-                }
-                setPointerMode={setPointerMode}
-              />
+            {interactiveLayers.map((layer) => (
+              <LayerNode key={layer.id} layer={layer} selected={selectedLayerIds.includes(layer.id)} />
             ))}
+            {selectedLayers.length > 0 && (
+              <SelectionOverlay
+                selection={selectedLayers}
+                previewTransforms={previewTransforms}
+                viewportZoom={viewport.zoom}
+                documentRect={documentRect}
+                onPreview={handleTransformPreview}
+                onCommit={handleTransformCommit}
+                onCancel={handleTransformCancel}
+                snapContext={snapContext}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -458,113 +587,10 @@ export const EditorPlayground = ({
 
 interface LayerNodeProps {
   layer: Layer;
-  documentId: string;
   selected: boolean;
-  viewportZoom: number;
-  onSelect: (layerIds: string[]) => void;
-  dispatchTransform: (transform: Transform) => void;
-  setPointerMode: Dispatch<SetStateAction<PointerMode>>;
 }
 
-const LayerNode = ({
-  layer,
-  selected,
-  viewportZoom,
-  onSelect,
-  dispatchTransform,
-  setPointerMode
-}: LayerNodeProps) => {
-  const nodeRef = useRef<HTMLDivElement | null>(null);
-
-  const handleMovePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (layer.locked) return;
-    event.stopPropagation();
-    onSelect([layer.id]);
-    setPointerMode({
-      type: 'move',
-      layerId: layer.id,
-      startX: event.clientX,
-      startY: event.clientY,
-      transform: layer.transform
-    });
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  useEffect(() => {
-    return () => {
-      setPointerMode({ type: 'idle' });
-    };
-  }, [setPointerMode]);
-
-  useEffect(() => {
-    const handleMove = (event: PointerEvent) => {
-      setPointerMode((mode) => {
-        if (mode.type === 'move' && mode.layerId === layer.id) {
-          const dx = (event.clientX - mode.startX) / viewportZoom;
-          const dy = (event.clientY - mode.startY) / viewportZoom;
-          dispatchTransform({ ...mode.transform, x: mode.transform.x + dx, y: mode.transform.y + dy });
-        }
-        if (mode.type === 'resize' && mode.layerId === layer.id) {
-          const dx = (event.clientX - mode.startX) / viewportZoom;
-          const dy = (event.clientY - mode.startY) / viewportZoom;
-          const width = Math.max(32, mode.transform.width + (mode.corner === 'se' ? dx : -dx));
-          const height = Math.max(32, mode.transform.height + (mode.corner === 'se' ? dy : -dy));
-          const x = mode.corner === 'nw' ? mode.transform.x + dx : mode.transform.x;
-          const y = mode.corner === 'nw' ? mode.transform.y + dy : mode.transform.y;
-          dispatchTransform({ ...mode.transform, width, height, x, y });
-        }
-        if (mode.type === 'rotate' && mode.layerId === layer.id && nodeRef.current) {
-          const rect = nodeRef.current.getBoundingClientRect();
-          const centerX = rect.left + rect.width / 2;
-          const centerY = rect.top + rect.height / 2;
-          const angle = (Math.atan2(event.clientY - centerY, event.clientX - centerX) * 180) / Math.PI;
-          dispatchTransform({ ...mode.transform, rotation: angle });
-        }
-        return mode;
-      });
-    };
-    const handleUp = () => {
-      setPointerMode({ type: 'idle' });
-    };
-    window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', handleUp);
-    window.addEventListener('pointercancel', handleUp);
-    return () => {
-      window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', handleUp);
-      window.removeEventListener('pointercancel', handleUp);
-    };
-  }, [dispatchTransform, layer.id, setPointerMode, viewportZoom]);
-
-  const handleResizePointerDown = (corner: 'se' | 'nw') => (event: React.PointerEvent<HTMLDivElement>) => {
-    if (layer.locked) return;
-    event.stopPropagation();
-    onSelect([layer.id]);
-    setPointerMode({
-      type: 'resize',
-      layerId: layer.id,
-      startX: event.clientX,
-      startY: event.clientY,
-      transform: layer.transform,
-      corner
-    });
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const handleRotatePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (layer.locked) return;
-    event.stopPropagation();
-    onSelect([layer.id]);
-    setPointerMode({
-      type: 'rotate',
-      layerId: layer.id,
-      startX: event.clientX,
-      startY: event.clientY,
-      transform: layer.transform
-    });
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
+const LayerNode = ({ layer, selected }: LayerNodeProps) => {
   if (!layer.visible || layer.type === 'group') {
     return null;
   }
@@ -572,31 +598,11 @@ const LayerNode = ({
   const style = transformToCss(layer.transform);
 
   return (
-    <div className="absolute" style={style} ref={nodeRef}>
+    <div className={`absolute ${selected ? 'z-10' : ''}`} style={style}>
       {layer.type === 'image' && layer.assetUrl ? (
         <img src={layer.assetUrl} alt={layer.name} className="h-full w-full rounded-md object-contain" draggable={false} />
       ) : (
-        <div className="h-full w-full rounded-md border border-border/40" />
-      )}
-      {selected && !layer.locked && (
-        <div
-          className="absolute inset-0 border-2 border-accent"
-          role="presentation"
-          onPointerDown={handleMovePointerDown}
-        >
-          <div
-            className="absolute -bottom-1 -right-1 h-4 w-4 cursor-se-resize rounded-full border border-border/60 bg-background"
-            onPointerDown={handleResizePointerDown('se')}
-          />
-          <div
-            className="absolute -top-1 -left-1 h-4 w-4 cursor-nw-resize rounded-full border border-border/60 bg-background"
-            onPointerDown={handleResizePointerDown('nw')}
-          />
-          <div
-            className="absolute left-1/2 -top-6 h-4 w-4 -translate-x-1/2 cursor-alias rounded-full border border-border/60 bg-background"
-            onPointerDown={handleRotatePointerDown}
-          />
-        </div>
+        <div className={`h-full w-full rounded-md border ${selected ? 'border-accent/80' : 'border-border/40'}`} />
       )}
     </div>
   );
