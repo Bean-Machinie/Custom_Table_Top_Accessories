@@ -12,10 +12,12 @@ export const defaultTransform = (width: number, height: number): Transform => ({
 
 export const transformToCss = (transform: Transform) => {
   const { x, y, scaleX, scaleY, rotation, width, height } = transform;
+  const cx = width / 2;
+  const cy = height / 2;
   return {
     width: `${width}px`,
     height: `${height}px`,
-    transform: `translate(${x}px, ${y}px) rotate(${rotation}deg) scale(${scaleX}, ${scaleY})`
+    transform: `translate(${x}px, ${y}px) translate(${cx}px, ${cy}px) rotate(${rotation}deg) scale(${scaleX}, ${scaleY}) translate(${-cx}px, ${-cy}px)`
   };
 };
 

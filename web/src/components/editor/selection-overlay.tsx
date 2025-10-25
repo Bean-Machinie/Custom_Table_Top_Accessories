@@ -64,7 +64,7 @@ export const SelectionOverlay = memo(
     const handleSize = scaleHandleSizeForZoom(12, viewportZoom);
     const rotationHandleOffset = handleSize * 4;
 
-    const { beginPointerTracking, guides } = useTransformHandles({
+    const { beginPointerTracking, guides, activeHandle } = useTransformHandles({
       selection: selectionWithPreview,
       viewport: { zoom: viewportZoom },
       documentRect,
@@ -89,7 +89,10 @@ export const SelectionOverlay = memo(
         >
           <button
             type="button"
-            className="absolute inset-0 h-full w-full cursor-move bg-transparent"
+            className={clsx(
+              'absolute inset-0 h-full w-full bg-transparent',
+              activeHandle === 'move' ? 'cursor-grabbing' : 'cursor-grab'
+            )}
             aria-label="Move selection"
             onPointerDown={(event) => beginPointerTracking('move', event)}
           />
@@ -133,12 +136,14 @@ export const SelectionOverlay = memo(
           <button
             type="button"
             aria-label="Rotate selection"
-            className="absolute left-1/2 flex -translate-x-1/2 items-center justify-center rounded-full border border-accent bg-background"
+            className={clsx(
+              'absolute left-1/2 flex -translate-x-1/2 items-center justify-center rounded-full border border-accent bg-background',
+              activeHandle === 'rotate' ? 'cursor-grabbing' : 'cursor-grab'
+            )}
             style={{
               width: handleSize,
               height: handleSize,
-              top: -rotationHandleOffset,
-              cursor: 'grab'
+              top: -rotationHandleOffset
             }}
             onPointerDown={(event) => beginPointerTracking('rotate', event)}
           />
