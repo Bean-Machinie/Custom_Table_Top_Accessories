@@ -206,19 +206,21 @@ export const EditorPlayground = ({
         const dx = event.key === 'ArrowRight' ? delta : event.key === 'ArrowLeft' ? -delta : 0;
         const dy = event.key === 'ArrowDown' ? delta : event.key === 'ArrowUp' ? -delta : 0;
         const seen = new Set<string>();
-        const updates: { layerId: string; transform: Transform }[] = [];
+        const changes: TransformChange[] = [];
         selectedLayerIds.forEach((layerId) => {
           if (seen.has(layerId)) return;
           seen.add(layerId);
           const layer = findLayerById(document.layers, layerId);
           if (!layer || layer.locked) return;
-          updates.push({
-            layerId: layer.id,
-            transform: { ...layer.transform, x: layer.transform.x + dx, y: layer.transform.y + dy }
-          });
+          changes.push({ id: layer.id, x: layer.transform.x + dx, y: layer.transform.y + dy });
         });
-        if (updates.length > 0) {
-          dispatch({ type: 'update-layer-transforms', documentId: document.id, updates });
+        if (changes.length > 0) {
+          handleTransformPreview(changes, []);
+          if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+            window.requestAnimationFrame(() => handleTransformCommit(changes));
+          } else {
+            handleTransformCommit(changes);
+          }
         }
       }
     };
